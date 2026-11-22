@@ -87,6 +87,8 @@ run it. Open it in its own window, from this repository's folder, so the owner c
 Start-Process powershell.exe -WorkingDirectory (Get-Location) -ArgumentList '-NoExit', '-Command', 'gh release-signing approve -Tag vX.Y.Z'
 ```
 
+- The GitHub CLI (`gh`) is installed and signed in. Use it for everything on GitHub (runs,
+  approvals, releases, secrets, `gh api`) instead of HTTP requests or fetching web pages.
 - Pass `-RunId <id>` after a rerun, and `-Workflow <file>` when the calling workflow is not
   `release.yml`.
 - If `gh extension list` does not show `release-signing`, run `Approve-ReleaseSigning.ps1` from a
