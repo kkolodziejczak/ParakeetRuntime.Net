@@ -102,8 +102,8 @@ Start-Process powershell.exe -WorkingDirectory (Get-Location) -ArgumentList '-No
   access list. See the gh-release-signing README.
 - `publish-nuget.yml` pushes through nuget.org trusted publishing, so no API key is stored. On
   nuget.org, add a trusted publishing policy (Repository owner `kkolodziejczak`, Repository
-  `ParakeetRuntime.Net`, Workflow file `publish-nuget.yml`, Environment empty), and set the
-  repository variable `NUGET_USER` to the nuget.org user name (not e-mail) that owns the policy.
+  `ParakeetRuntime.Net`, Workflow file `publish-nuget.yml`, Environment empty). The workflow logs
+  in as the nuget.org user `kkolodziejczak`, which owns that policy (set up on 2026-11-22).
 - nuget.org accepts a signed package only after its certificate is registered on the account:
   export the public certificate (`.cer`) from a signed `parakeet-runtime.exe` and upload it in the
   nuget.org account settings. Repeat after each yearly certificate renewal.
