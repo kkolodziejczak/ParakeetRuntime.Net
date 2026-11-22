@@ -100,8 +100,10 @@ Start-Process powershell.exe -WorkingDirectory (Get-Location) -ArgumentList '-No
 - The `code-signing` environment (owner as required reviewer; `v*.*.*` tags and `master`) needs
   the secrets `CERTUM_EMAIL` and `MAILBOX_TOKEN`, and this repository must be on that token's
   access list. See the gh-release-signing README.
-- `publish-nuget.yml` needs the repository secret `NUGET_API_KEY`, an API key scoped to push
-  `ParakeetRuntime`.
+- `publish-nuget.yml` pushes through nuget.org trusted publishing, so no API key is stored. On
+  nuget.org, add a trusted publishing policy (Repository owner `kkolodziejczak`, Repository
+  `ParakeetRuntime.Net`, Workflow file `publish-nuget.yml`, Environment empty), and set the
+  repository variable `NUGET_USER` to the nuget.org user name (not e-mail) that owns the policy.
 - nuget.org accepts a signed package only after its certificate is registered on the account:
   export the public certificate (`.cer`) from a signed `parakeet-runtime.exe` and upload it in the
   nuget.org account settings. Repeat after each yearly certificate renewal.

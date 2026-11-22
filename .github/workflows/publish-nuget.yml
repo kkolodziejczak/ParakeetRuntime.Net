@@ -1,8 +1,9 @@
 name: Publish to NuGet
 
-# Publishing a drafted release pushes its signed package to nuget.org. Needs the NUGET_API_KEY
-# secret, and nuget.org accepts a signed package only once its certificate is registered on the
-# nuget.org account (see AGENTS.md).
+# Publishing a drafted release pushes its signed package to nuget.org through trusted publishing:
+# NuGet/login trades this job's GitHub OIDC token for a short-lived API key, so no key is stored.
+# Needs the nuget.org trusted publishing policy for this workflow, the NUGET_USER repository
+# variable, and the signing certificate registered on the nuget.org account (see AGENTS.md).
 on:
   release:
     types: [published]
@@ -15,19 +16,33 @@ jobs:
     name: Push the signed package to nuget.org
     runs-on: windows-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # the OIDC token that nuget.org trusted publishing checks
     steps:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 10.0.x
+
+      - name: Check the nuget.org user
+        shell: pwsh
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        run: if ([string]::IsNullOrWhiteSpace($env:NUGET_USER)) { throw 'Add the NUGET_USER repository variable first (see AGENTS.md).' }
+
+      - name: Log in to nuget.org
+        id: nuget
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
 
       - name: Download, verify and push the package
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) { throw 'Add the NUGET_API_KEY repository secret first (see AGENTS.md).' }
           if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Release tag '$env:TAG' is not vMAJOR.MINOR.PATCH." }
           $name = "ParakeetRuntime.$($Matches[1]).nupkg"
           gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern "$name.sha256" --dir release
