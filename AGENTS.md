@@ -9,7 +9,7 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | `ParakeetRuntime.Net.slnx` | The solution. |
 | `src/ParakeetRuntime` | The engine library, packed as the `ParakeetRuntime` NuGet package. Plain `net10.0`, marked Windows-only. |
 | `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file. |
-| `tests/ParakeetRuntime.Tests` | xUnit tests. |
+| `tests/ParakeetRuntime.Tests` | xUnit test project; empty until the engine and its tests move in. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |
 | `scripts/Test-ReleaseArtifacts.ps1` | Checks those files, and their signatures when given a thumbprint. |
 | `Directory.Build.props` | Shared settings: target framework, version, embedded PDBs, package metadata. |
@@ -90,5 +90,6 @@ releases.
 ## Conventions
 
 - Pin package and GitHub Action versions (Actions by SHA with a version comment); dependabot
-  updates the Actions weekly.
+  updates the Actions weekly. The one deliberate exception is `gh-release-signing`'s `sign.yml@main`:
+  the owner's yearly certificate renewal reaches every repository through that branch.
 - Keep nullable reference types on and resolve warnings instead of suppressing them.

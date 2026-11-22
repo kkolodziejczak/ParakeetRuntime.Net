@@ -12,6 +12,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+# SignedCms ships with PowerShell 7 as System.Security.Cryptography.Pkcs, and with .NET Framework
+# (Windows PowerShell 5.1) inside System.Security.
+try { Add-Type -AssemblyName System.Security.Cryptography.Pkcs } catch { Add-Type -AssemblyName System.Security }
 
 $root = Split-Path -Parent $PSScriptRoot
 $output = Join-Path $root "artifacts\release\$Version"
@@ -20,7 +23,7 @@ $exe = Join-Path $folder 'parakeet-runtime.exe'
 $packagePath = Join-Path $output "ParakeetRuntime.$Version.nupkg"
 
 function Assert-Signed([string]$Path) {
-    $signature = Get-AuthenticodeSignature -FilePath $Path
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $ExpectedSignerThumbprint) {
         throw "'$Path' signature is '$($signature.Status)' from '$($signature.SignerCertificate.Subject)'; expected certificate $ExpectedSignerThumbprint."
     }
@@ -62,6 +65,12 @@ try {
         $fingerprint = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($certificate.RawData)) -replace '-', ''
         dotnet nuget verify $packagePath --all --certificate-fingerprint $fingerprint
         if ($LASTEXITCODE -ne 0) { throw "dotnet nuget verify failed with exit code $LASTEXITCODE." }
+        # dotnet nuget verify only warns (NU3027) when the package signature has no timestamp.
+        $cms = New-Object Security.Cryptography.Pkcs.SignedCms
+        $cms.Decode([IO.File]::ReadAllBytes((Join-Path $unpacked '.signature.p7s')))
+        if (-not ($cms.SignerInfos[0].UnsignedAttributes | Where-Object { $_.Oid.Value -eq '1.2.840.113549.1.9.16.2.14' })) {
+            throw 'The package signature has no timestamp.'
+        }
     }
 }
 finally {

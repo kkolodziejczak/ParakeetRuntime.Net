@@ -47,7 +47,12 @@ jobs:
         id: build
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -match '^v(\d+\.\d+\.\d+)$') { $Matches[1] } else { '0.0.0' }
+          # A manual run on a branch builds 0.0.0; any tag must be vMAJOR.MINOR.PATCH, because it gets signed.
+          $version = '0.0.0'
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Release tags must be vMAJOR.MINOR.PATCH; got '$env:GITHUB_REF_NAME'." }
+            $version = $Matches[1]
+          }
           ./scripts/Build-Release.ps1 -Version $version
           ./scripts/Test-ReleaseArtifacts.ps1 -Version $version
           "version=$version" >> $env:GITHUB_OUTPUT
@@ -141,5 +146,17 @@ jobs:
           $release = "artifacts/release/$env:VERSION"
           $zip = "$release/ParakeetRuntime-$env:VERSION-win-x64.zip"
           $package = "$release/ParakeetRuntime.$env:VERSION.nupkg"
-          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" $package "$package.sha256" --draft --verify-tag --title "ParakeetRuntime $env:GITHUB_REF_NAME" --notes-file ".github/release-notes/$env:GITHUB_REF_NAME.md"
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE." }
+          $assets = @($zip, "$zip.sha256", $package, "$package.sha256")
+          $notes = ".github/release-notes/$env:GITHUB_REF_NAME.md"
+          # A rerun replaces the files of the draft it made before; a published release is never touched.
+          $existing = gh release view $env:GITHUB_REF_NAME --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) { throw "Release $env:GITHUB_REF_NAME is already published." }
+            gh release upload $env:GITHUB_REF_NAME @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE." }
+            gh release edit $env:GITHUB_REF_NAME --notes-file $notes
+          }
+          else {
+            gh release create $env:GITHUB_REF_NAME @assets --draft --verify-tag --title "ParakeetRuntime $env:GITHUB_REF_NAME" --notes-file $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Creating or updating draft release $env:GITHUB_REF_NAME failed with exit code $LASTEXITCODE." }
