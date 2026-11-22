@@ -1,0 +1,42 @@
+name: Publish to NuGet
+
+# Publishing a drafted release pushes its signed package to nuget.org. Needs the NUGET_API_KEY
+# secret, and nuget.org accepts a signed package only once its certificate is registered on the
+# nuget.org account (see AGENTS.md).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Push the signed package to nuget.org
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download, verify and push the package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) { throw 'Add the NUGET_API_KEY repository secret first (see AGENTS.md).' }
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Release tag '$env:TAG' is not vMAJOR.MINOR.PATCH." }
+          $name = "ParakeetRuntime.$($Matches[1]).nupkg"
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern "$name.sha256" --dir release
+          if ($LASTEXITCODE -ne 0) { throw "Could not download $name from release $env:TAG." }
+          $expected = (Get-Content -LiteralPath "release/$name.sha256" -Raw).Split(' ')[0]
+          $actual = (Get-FileHash -LiteralPath "release/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "$name has SHA-256 $actual; its .sha256 file says $expected." }
+          # Refuses an unsigned or altered package.
+          dotnet nuget verify "release/$name" --all
+          if ($LASTEXITCODE -ne 0) { throw "dotnet nuget verify failed with exit code $LASTEXITCODE." }
+          dotnet nuget push "release/$name" --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY
+          if ($LASTEXITCODE -ne 0) { throw "dotnet nuget push failed with exit code $LASTEXITCODE." }

@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a focused improvement.
+title: "[Feature]: "
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar proposal.
+          required: true
+        - label: This request contains no private audio, transcripts, or other sensitive information.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or impossible today, and who runs into it?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the behavior you want rather than only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Recognition accuracy
+        - CPU speed
+        - GPU speed
+        - Model loading and GGUF support
+        - .NET API (NuGet package)
+        - Command-line tool
+        - Packaging, signing, or documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context

@@ -1,0 +1,145 @@
+name: Release
+
+# A version tag tests and builds parakeet-runtime.exe and the ParakeetRuntime package, signs the
+# exe, the DLL inside the package and the package after the owner's approval
+# (gh release-signing approve -Tag vX.Y.Z), then verifies, zips, hashes and drafts the release.
+# A manual run from a branch builds unsigned test files and never signs or releases.
+on:
+  workflow_dispatch:
+  push:
+    # vMAJOR.MINOR.PATCH only: the format gh release-signing approve -Tag accepts.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build the unsigned files
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Checked before signing, so a missing file never costs an approval and a phone code.
+      - name: Check the release notes
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $notesPath = ".github/release-notes/$env:GITHUB_REF_NAME.md"
+          if (!(Test-Path -LiteralPath $notesPath -PathType Leaf)) {
+            throw "Release notes are required before tagging: $notesPath"
+          }
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run tests
+        shell: pwsh
+        run: dotnet test ParakeetRuntime.Net.slnx --configuration Release
+
+      - name: Build and check the unsigned files
+        id: build
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -match '^v(\d+\.\d+\.\d+)$') { $Matches[1] } else { '0.0.0' }
+          ./scripts/Build-Release.ps1 -Version $version
+          ./scripts/Test-ReleaseArtifacts.ps1 -Version $version
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      # Holds the exe's folder and the package exactly as they go into the release.
+      - name: Keep the unsigned files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-release
+          path: artifacts/release/${{ steps.build.outputs.version }}/
+          if-no-files-found: error
+          # Signing must be approved, and failed jobs rerun, within this window.
+          retention-days: 7
+
+  sign:
+    needs: build
+    if: github.ref_type == 'tag'
+    uses: kkolodziejczak/gh-release-signing/.github/workflows/sign.yml@main
+    secrets: inherit # without it the signing job sees no secrets, not even its environment's
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      artifact: unsigned-release
+      # The exe in its folder and the library inside the package; then the package itself.
+      files: parakeet-runtime.exe;ParakeetRuntime.dll
+      packages: "*.nupkg"
+      signed-artifact: signed-release
+      retention-days: 7
+
+  release:
+    name: Verify, zip and draft the release
+    needs: [build, sign]
+    # A tag always goes through signing; a manual run from a branch skips it.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.sign.result == 'success' || (needs.sign.result == 'skipped' && github.ref_type != 'tag')) }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      SIGNER_THUMBPRINT: ${{ needs.sign.outputs.thumbprint }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # dotnet nuget verify checks the package signature.
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ github.ref_type == 'tag' && 'signed-release' || 'unsigned-release' }}
+          path: artifacts/release/${{ needs.build.outputs.version }}
+
+      - name: Verify, zip and hash
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and [string]::IsNullOrWhiteSpace($env:SIGNER_THUMBPRINT)) {
+            throw 'The signing job reported no certificate thumbprint.'
+          }
+          ./scripts/Test-ReleaseArtifacts.ps1 -Version $env:VERSION -ExpectedSignerThumbprint $env:SIGNER_THUMBPRINT
+          $release = "artifacts/release/$env:VERSION"
+          $zip = "$release/ParakeetRuntime-$env:VERSION-win-x64.zip"
+          Compress-Archive -LiteralPath "$release/ParakeetRuntime-$env:VERSION-win-x64" -DestinationPath $zip -CompressionLevel Optimal
+          foreach ($asset in $zip, "$release/ParakeetRuntime.$env:VERSION.nupkg") {
+            $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path -Leaf $asset)" | Set-Content -LiteralPath "$asset.sha256" -NoNewline
+            Write-Host "$(Split-Path -Leaf $asset): $((Get-Item -LiteralPath $asset).Length) bytes"
+          }
+
+      - name: Keep the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ParakeetRuntime-${{ needs.build.outputs.version }}
+          path: |
+            artifacts/release/${{ needs.build.outputs.version }}/*.zip
+            artifacts/release/${{ needs.build.outputs.version }}/*.nupkg
+            artifacts/release/${{ needs.build.outputs.version }}/*.sha256
+          if-no-files-found: error
+
+      - name: Create the draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $release = "artifacts/release/$env:VERSION"
+          $zip = "$release/ParakeetRuntime-$env:VERSION-win-x64.zip"
+          $package = "$release/ParakeetRuntime.$env:VERSION.nupkg"
+          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" $package "$package.sha256" --draft --verify-tag --title "ParakeetRuntime $env:GITHUB_REF_NAME" --notes-file ".github/release-notes/$env:GITHUB_REF_NAME.md"
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE." }

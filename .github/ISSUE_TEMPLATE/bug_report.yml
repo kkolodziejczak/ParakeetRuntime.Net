@@ -1,0 +1,89 @@
+name: Bug report
+description: Report wrong transcription, a crash, or other reproducible behavior.
+title: "[Bug]: "
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I attached no private audio or transcripts. Any sample is synthetic, public (for example FLEURS), or mine to share.
+          required: true
+        - label: This is not a security vulnerability. Security reports follow SECURITY.md.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag, NuGet package version, or commit SHA.
+      placeholder: v0.1.0 or abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: How you use it
+      options:
+        - parakeet-runtime.exe from a release
+        - ParakeetRuntime NuGet package
+        - Source build
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Processor and graphics
+      description: The device the model ran on, and whether it was the CPU or GPU path.
+      placeholder: Intel Core i7-11850H, NVIDIA GeForce MX450, GPU path
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      description: File name and SHA-256 (Get-FileHash <file> -Algorithm SHA256).
+      placeholder: parakeet-tdt-0.6b-v3.q8_0.gguf, e3880d0a...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: The smallest command or code that shows the problem.
+      placeholder: |
+        1. Run parakeet-runtime ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Output or exception
+      description: Paste console output or the exception text.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Note whether it happens every time, and whether it began after an upgrade.

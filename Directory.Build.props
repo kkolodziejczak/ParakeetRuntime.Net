@@ -1,0 +1,18 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The PDB travels inside each assembly, so the single-file exe and the package need no symbol files. -->
+    <DebugType>embedded</DebugType>
+    <!-- Releases pass -p:Version from the tag (scripts/Build-Release.ps1). -->
+    <Version>0.0.0</Version>
+    <Authors>Krzysztof Kołodziejczak</Authors>
+    <Copyright>Copyright (c) 2026 Krzysztof Kołodziejczak</Copyright>
+    <RepositoryUrl>https://github.com/kkolodziejczak/ParakeetRuntime.Net</RepositoryUrl>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+</Project>

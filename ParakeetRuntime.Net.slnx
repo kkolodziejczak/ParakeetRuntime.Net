@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ParakeetRuntime/ParakeetRuntime.csproj" />
+    <Project Path="src/ParakeetRuntime.Cli/ParakeetRuntime.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ParakeetRuntime.Tests/ParakeetRuntime.Tests.csproj" />
+  </Folder>
+</Solution>

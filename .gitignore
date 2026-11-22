@@ -1,0 +1,23 @@
+# Build output
+**/bin/
+**/obj/
+artifacts/
+**/TestResults/
+*.trx
+BenchmarkDotNet.Artifacts/
+
+# Speech models and recordings never go into the repository
+models/
+*.gguf
+*.wav
+*.flac
+*.mp3
+
+# Visual Studio, Rider and VS Code user state
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
