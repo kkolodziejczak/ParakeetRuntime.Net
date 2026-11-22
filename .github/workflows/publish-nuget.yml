@@ -47,5 +47,5 @@ jobs:
           # Refuses an unsigned or altered package.
           dotnet nuget verify "release/$name" --all
           if ($LASTEXITCODE -ne 0) { throw "dotnet nuget verify failed with exit code $LASTEXITCODE." }
-          dotnet nuget push "release/$name" --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY
+          dotnet nuget push "release/$name" --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
           if ($LASTEXITCODE -ne 0) { throw "dotnet nuget push failed with exit code $LASTEXITCODE." }
