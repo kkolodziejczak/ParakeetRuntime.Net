@@ -817,3 +817,25 @@ layer's products.
 | RTX 5070 Ti | large (64 x 64) | 0.82x | 0.86x | 0.95x | 1.03x | 1.38x | 1.54x |
 | Intel Graphics | small (32 x 32) | 1.05x | 1.10x | 1.11x | 1.09x | 1.11x | 1.12x |
 | Intel Graphics | large (64 x 64) | 0.88x | 1.54x | 1.29x | 1.65x | 1.66x | 1.61x |
+
+## 2026-11-23 · WAV reading and conversion to 16 kHz mono
+
+- **Machine:** Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti, driver 610.88, 95 GB RAM
+- **Commit:** the ParakeetRuntime commit that adds this record (the WAV reader), on top of `44b1ae8`
+- **Setup:** `WavAudio.Read16KhzMono` against NAudio.Core 2.2.1 (`WaveFileReader`,
+  `StereoToMonoSampleProvider`, `WdlResamplingSampleProvider`); model `parakeet-tdt-0.6b-v3.q8_0.gguf`
+  on the RTX 5070 Ti; 30 FLEURS `en_us` clips, each converted to 48 kHz stereo float, 44.1 kHz stereo
+  PCM16 and 8 kHz mono PCM16; a 600.64 s 48 kHz stereo PCM16 file; no affinity; 3 passes
+
+| Measure | ParakeetRuntime | NAudio WDL |
+| --- | --- | --- |
+| 600.64 s, 48 kHz stereo PCM16 to 16 kHz mono | 283–486 ms | 503–599 ms |
+| Managed memory allocated for that file | 36 MB (the 16 kHz result is 37 MB) | not measured |
+
+| Clips | Identical transcripts, ParakeetRuntime vs NAudio WDL input |
+| --- | --- |
+| 48 kHz stereo float | 30/30 |
+| 44.1 kHz stereo PCM16 | 30/30 |
+| 8 kHz mono PCM16 | 25/30 |
+
+At 8 kHz the two resamplers' upsampling filters differ, so 5 transcripts differ; WER was not compared.
