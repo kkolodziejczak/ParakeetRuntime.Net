@@ -15,10 +15,9 @@ GGUF file and transcribes audio on the processor, with int8 kernels, or on the g
 through Direct3D 12. Audio never leaves your computer, and no Python or separate native runtime
 is needed.
 
-> **Status: groundwork.** The engine is moving here from
-> [LocalBuddy](https://github.com/kkolodziejczak/LocalBuddy), where it was built and tuned. Until
-> the first release, this repository holds the build, test and signed-release pipeline it will
-> ship through.
+> **Status: before the first release.** The engine moved here from
+> [LocalBuddy](https://github.com/kkolodziejczak/LocalBuddy), where it was built and tuned. Its
+> API (`SpeechEngine` and `SpeechModel`) may still change before version 1.0.
 
 ## Two ways to use it
 

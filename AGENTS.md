@@ -8,8 +8,9 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | --- | --- |
 | `ParakeetRuntime.Net.slnx` | The solution. |
 | `src/ParakeetRuntime` | The engine library, packed as the `ParakeetRuntime` NuGet package. Plain `net10.0`, marked Windows-only. |
-| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file. |
-| `tests/ParakeetRuntime.Tests` | xUnit test project; empty until the engine and its tests move in. |
+| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file, with the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
+| `tests/ParakeetRuntime.Tests` | xUnit tests: kernels, GGUF reading, GPU kernels (skipped without a GPU), and the real model (skipped when it isn't installed). |
+| `scripts/Run-Matrix.ps1` | The full speed matrix against NeMo-Speech.cpp, one run at a time, through `parakeet-runtime.exe --corpus`. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |
 | `scripts/Test-ReleaseArtifacts.ps1` | Checks those files, and their signatures when given a thumbprint. |
 | `Directory.Build.props` | Shared settings: target framework, version, embedded PDBs, package metadata. |
@@ -18,21 +19,39 @@ The library has no Windows SDK projection: the engine reaches Windows only throu
 `d3d12.dll`, `dxgi.dll`, `d3dcompiler_47.dll` and `kernel32.dll`, which every supported Windows
 ships. Keep it that way, so that any `net10.0` application can reference the package.
 
-## Moving the engine in
+## Where the engine came from
 
-The engine lives in LocalBuddy at `src/LocalBuddy.Transcription/Parakeet/` (C# and HLSL
-shaders), with its benchmark in `src/LocalBuddy.Spike/` and its tests in `tests/LocalBuddy.Tests/`
-(`GgufTests`, `KernelsTests`, `D3D12KernelsTests`, `SpeechEngineTests`). Several LocalBuddy
-branches still change it (`perf/engine-matrix`, `feat/optimize-long-audio-attention`,
-`other/perf-long-utterance-gpu-scaling`). Ask the owner which state to move, and whether to keep
-its Git history, before copying anything.
+The engine was built in LocalBuddy and moved here on 2026-11-23 as a fresh copy of
+`kkolodziejczak/LocalBuddy` at `19d2905` (branch `perf/engine-matrix`); its history stays there.
+Its measurements are in LocalBuddy PR #3 and in that branch's commit messages. LocalBuddy will
+switch to the `ParakeetRuntime` package in its own repository. Its live and replay commands stay
+there, because they use the app's audio capture.
 
-- Rename the namespace `LocalBuddy.Transcription.Parakeet` to `ParakeetRuntime`.
-- Keep the shaders as embedded resources and the per-file note that the code is a port of
-  NeMo-Speech.cpp. Port more of NeMo-Speech.cpp only with an update to
-  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-- The benchmark and live commands become subcommands of `parakeet-runtime.exe`.
-- Design the public API before making types public: today everything in the engine is internal.
+- The public API is `SpeechEngine` and `SpeechModel`; everything else in the engine is internal.
+  Design a change to it before making more types public.
+- Keep the shaders as embedded resources and the attribution to NeMo-Speech.cpp. Port more of
+  NeMo-Speech.cpp only with an update to [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- `SpeechModel.Default()` keeps the model in `%LOCALAPPDATA%\ParakeetRuntime\models`. The tests
+  that need the real model look for it there.
+
+### Owner's rules for the engine code
+
+- No comments in code: a reason goes into a name, and hardware-specific behaviour becomes a named
+  method or constant. License and attribution headers stay.
+- Facts that hold on every machine and don't change (for example the ggml Q8_0 quantize contract
+  or the model format) go into `docs/`.
+- Measured values go into `docs/benchmarks.md`, which is append-only and dated: date, machine,
+  commit and numbers, never edited afterwards.
+
+### Open follow-ups
+
+- Tiered JIT: with default tiering, `Kernels.Quantize`'s AVX2 passes stay at instrumented Tier0 for
+  a whole `--cpu-bench` run, which skews kernel A/B tests. A/B kernels with
+  `DOTNET_TieredCompilation=0`. Whether an app's first utterances run Tier0 code is not measured.
+- Intel iGPU load takes 2.3 s instead of 2.0 s since the 64x64 GEMM tile. The cause isn't traced.
+- Next CPU step, which needs the owner's OK: the positions-table walk in the attention scores.
+- Benchmarks: pin 4 P-cores (`--affinity C03` on the owner's Core Ultra 7 270K Plus) and run one at
+  a time. The CPU has no AVX-512.
 
 ## Verification
 

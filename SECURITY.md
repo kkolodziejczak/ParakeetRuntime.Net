@@ -32,7 +32,9 @@ details.
   [Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases) or the `ParakeetRuntime`
   package on nuget.org. Releases are signed by **Open Source Developer Krzysztof Kołodziejczak**
   (Certum); do not run a file whose signature is missing or names someone else.
-- Transcription runs locally. The engine opens no network connections.
+- Transcription runs locally and opens no network connections. The only network call is
+  `SpeechModel.DownloadAsync`, which fetches the pinned model from Hugging Face when an application
+  calls it, through the `HttpClient` that application passes in.
 
 This policy covers ParakeetRuntime. Report problems in .NET, Windows, graphics drivers, or the
 NVIDIA models to their own vendors.
