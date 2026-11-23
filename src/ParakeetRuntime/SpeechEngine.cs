@@ -6,10 +6,10 @@ namespace ParakeetRuntime;
 /// </summary>
 public sealed class SpeechEngine : IDisposable
 {
-    private ParakeetModel? modelUntilDisposed;
+    private IUtteranceRecognizer? modelUntilDisposed;
     private readonly SemaphoreSlim oneAtATime = new(1, 1);
 
-    internal SpeechEngine(ParakeetModel model) => this.modelUntilDisposed = model;
+    internal SpeechEngine(IUtteranceRecognizer model) => this.modelUntilDisposed = model;
 
     /// <summary>
     /// Loads an installed model into memory. This reads the whole model file and takes a few seconds.
@@ -23,12 +23,12 @@ public sealed class SpeechEngine : IDisposable
     {
         if (!speechModel.IsInstalled)
             throw new FileNotFoundException($"The speech model is not installed ({speechModel.Path}).", speechModel.Path);
-        var model = await Task.Run(() => new ParakeetModel(speechModel.Path), cancellationToken);
+        var model = await Task.Run(() => new ParakeetModel(speechModel.Path), cancellationToken).ConfigureAwait(false);
         return new SpeechEngine(model);
     }
 
     internal static async Task<SpeechEngine> LoadUncheckedAsync(string modelPath) =>
-        new(await Task.Run(() => new ParakeetModel(modelPath)));
+        new(await Task.Run(() => new ParakeetModel(modelPath)).ConfigureAwait(false));
 
     /// <summary>
     /// Transcribes one utterance. Calls made while another transcription runs wait for it to finish.
@@ -41,12 +41,12 @@ public sealed class SpeechEngine : IDisposable
     /// <exception cref="OperationCanceledException">The token was cancelled while waiting.</exception>
     public async Task<string> TranscribeAsync(float[] samples16KhzMono, CancellationToken cancellationToken = default)
     {
-        await oneAtATime.WaitAsync(cancellationToken);
+        await oneAtATime.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var running = modelUntilDisposed;
             ObjectDisposedException.ThrowIf(running is null, this);
-            return await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono);
+            return await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono).ConfigureAwait(false);
         }
         finally
         {
@@ -54,7 +54,7 @@ public sealed class SpeechEngine : IDisposable
         }
     }
 
-    private static Task<string> RunToCompletionWhileHoldingTheLock(ParakeetModel model, float[] samples16KhzMono) =>
+    private static Task<string> RunToCompletionWhileHoldingTheLock(IUtteranceRecognizer model, float[] samples16KhzMono) =>
         Task.Run(() => model.Transcribe(samples16KhzMono));
 
     /// <summary>

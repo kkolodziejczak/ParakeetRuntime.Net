@@ -10,7 +10,7 @@ internal readonly record struct TranscribeProfile(double MelMs, double Subsample
     public double TotalMs => MelMs + SubsampleMs + EncoderMs + DecodeMs;
 }
 
-internal sealed unsafe class ParakeetModel : IDisposable
+internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 {
     readonly string modelPath;
     readonly Mel mel;
