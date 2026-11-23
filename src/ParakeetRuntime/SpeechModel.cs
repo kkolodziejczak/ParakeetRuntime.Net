@@ -85,6 +85,30 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
 
     private void RecordVerified() => fs.File.WriteAllText(VerifiedPath, VerifiedRecord(fs.FileInfo.New(Path)));
 
+    private static readonly HttpClient SharedDownloadClient = new();
+
+    /// <summary>
+    /// Downloads and installs the pinned file unless it is already installed. Safe to call on every start.
+    /// </summary>
+    /// <param name="progress">Receives the fraction of the file received, from 0 to 1, or a single 1 when the model is already installed; may be null.</param>
+    /// <param name="cancellationToken">Stops the download and keeps nothing.</param>
+    /// <exception cref="HttpRequestException">The server could not be reached or did not return the file.</exception>
+    /// <exception cref="InvalidDataException">The downloaded file does not match the pinned size and SHA-256.</exception>
+    /// <exception cref="TimeoutException">No data arrived for <see cref="StallTimeout"/>.</exception>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public Task EnsureInstalledAsync(IProgress<double>? progress = null, CancellationToken cancellationToken = default) =>
+        EnsureInstalledAsync(SharedDownloadClient, progress, cancellationToken);
+
+    internal async Task EnsureInstalledAsync(HttpClient http, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        if (IsInstalled)
+        {
+            progress?.Report(1.0);
+            return;
+        }
+        await DownloadAsync(http, progress, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Downloads the pinned file from its source and installs it. Nothing is left under the final
     /// name unless the download matches the pin.
@@ -98,10 +122,10 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
     /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
     public async Task DownloadAsync(HttpClient http, IProgress<double>? progress, CancellationToken cancellationToken)
     {
-        using var response = await http.GetAsync(Pinned.Source, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await http.GetAsync(Pinned.Source, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await InstallViaPartFileAsync(source, progress, cancellationToken);
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await InstallViaPartFileAsync(source, progress, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -119,18 +143,18 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
     {
         if (fs.Path.GetFullPath(sourcePath).Equals(fs.Path.GetFullPath(Path), StringComparison.OrdinalIgnoreCase))
         {
-            await CheckFileAlreadyAtFinalPathAsync(progress, cancellationToken);
+            await CheckFileAlreadyAtFinalPathAsync(progress, cancellationToken).ConfigureAwait(false);
             return;
         }
         await using var source = fs.FileStream.New(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        await InstallViaPartFileAsync(source, progress, cancellationToken);
+        await InstallViaPartFileAsync(source, progress, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task CheckFileAlreadyAtFinalPathAsync(IProgress<double>? progress, CancellationToken cancellationToken)
     {
         bool matches;
         await using (var file = fs.FileStream.New(Path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            matches = await MatchesPinAsync(file, copyTo: null, progress, cancellationToken);
+            matches = await MatchesPinAsync(file, copyTo: null, progress, cancellationToken).ConfigureAwait(false);
         if (!matches)
         {
             fs.File.Delete(Path);
@@ -149,7 +173,7 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
             bool matches;
             await using (var part = fs.FileStream.New(partPathUniqueToThisInstall, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                matches = await MatchesPinAsync(source, part, progress, cancellationToken);
+                matches = await MatchesPinAsync(source, part, progress, cancellationToken).ConfigureAwait(false);
                 part.Flush(flushToDisk: true);
             }
             if (!matches)
@@ -169,14 +193,14 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
         var buffer = new byte[1 << 20];
         long read = 0;
         int count;
-        while ((count = await ReadWithinStallTimeoutAsync(source, buffer, cancellationToken)) > 0)
+        while ((count = await ReadWithinStallTimeoutAsync(source, buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
             read += count;
             if (read > Pinned.Bytes)
                 return false;
             hash.AppendData(buffer, 0, count);
             if (copyTo is not null)
-                await copyTo.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+                await copyTo.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
             progress?.Report((double)read / Pinned.Bytes);
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -189,7 +213,7 @@ public sealed class SpeechModel(string folder, SpeechModelFile pinned, IFileSyst
         stall.CancelAfter(StallTimeout);
         try
         {
-            return await source.ReadAsync(buffer, stall.Token);
+            return await source.ReadAsync(buffer, stall.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

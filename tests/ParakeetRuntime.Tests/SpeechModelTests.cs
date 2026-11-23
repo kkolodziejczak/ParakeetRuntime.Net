@@ -48,6 +48,31 @@ public sealed class SpeechModelTests
     }
 
     [Fact]
+    public async Task Ensuring_a_missing_model_downloads_and_installs_it()
+    {
+        var progress = new List<double>();
+        var model = Model();
+
+        await model.EnsureInstalledAsync(Serving(Weights), new InlineProgressInOrder(progress.Add), CancellationToken.None);
+
+        Assert.True(model.IsInstalled);
+        Assert.Equal(1.0, progress[^1]);
+    }
+
+    [Fact]
+    public async Task Ensuring_an_installed_model_downloads_nothing_and_reports_it_complete()
+    {
+        var model = Model();
+        await model.DownloadAsync(Serving(Weights), null, CancellationToken.None);
+        var progress = new List<double>();
+
+        await model.EnsureInstalledAsync(new HttpClient(new NoNetwork()), new InlineProgressInOrder(progress.Add), CancellationToken.None);
+
+        Assert.True(model.IsInstalled);
+        Assert.Equal([1.0], progress);
+    }
+
+    [Fact]
     public async Task A_download_with_the_wrong_content_is_rejected_and_leaves_nothing_behind()
     {
         var model = Model();
@@ -193,6 +218,12 @@ public sealed class SpeechModelTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) });
+    }
+
+    private sealed class NoNetwork : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The test expected no download.");
     }
 
     private sealed class InlineProgressInOrder(Action<double> report) : IProgress<double>
