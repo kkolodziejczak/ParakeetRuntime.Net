@@ -2,8 +2,6 @@ using ParakeetRuntime;
 
 namespace ParakeetRuntime.Tests;
 
-// How many GPU decoder steps go into one submit: long enough to save CPU round trips, short enough
-// that a slow GPU never runs one submit anywhere near Windows' 2 s GPU timeout.
 public sealed class DecodeBatchTests
 {
     private const double Budget = 350;

@@ -1,4 +1,4 @@
-// Part of the Parakeet engine; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
+// Part of ParakeetRuntime; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -9,24 +9,19 @@ namespace ParakeetRuntime;
 
 internal static unsafe class Kernels
 {
-    // One thread per fast core the process may run on, at most 8 (see ThreadBudget).
     static int Threads = ThreadBudget.ForThisProcess();
     static ParallelOptions Opt = new() { MaxDegreeOfParallelism = Threads };
 
     internal static int ThreadCount => Threads;
 
-    // For the Spike's --threads, to measure other budgets; set before any model runs.
-    internal static void UseThreads(int threads)
+    internal static void OverrideThreadBudgetForBenchmark(int threads)
     {
         Threads = threads;
         Opt = new() { MaxDegreeOfParallelism = threads };
     }
 
-    // The fast paths need AVX2 and FMA. Not every Windows 11 CPU has them (for example the
-    // Pentium Silver N6000), so 128-bit vectors stand in: slower, same results within rounding.
-    static readonly bool Simd = Avx2.IsSupported && Fma.IsSupported;
+    static readonly bool HasAvx2AndFma = Avx2.IsSupported && Fma.IsSupported;
 
-    // The fastest int8 product this CPU has; the weights are packed for it once, at load.
     public static readonly Int8Path BestPath =
         Supports(Int8Path.AvxVnniInt8) ? Int8Path.AvxVnniInt8
         : Supports(Int8Path.AvxVnni) ? Int8Path.AvxVnni
@@ -36,26 +31,22 @@ internal static unsafe class Kernels
     public static bool Supports(Int8Path path) => path switch
     {
         Int8Path.Portable => true,
-        Int8Path.Avx2 => Simd,
-        Int8Path.AvxVnni => Simd && AvxVnni.IsSupported,
-        Int8Path.AvxVnniInt8 => Simd && AvxVnniInt8.IsSupported,
+        Int8Path.Avx2 => HasAvx2AndFma,
+        Int8Path.AvxVnni => HasAvx2AndFma && AvxVnni.IsSupported,
+        Int8Path.AvxVnniInt8 => HasAvx2AndFma && AvxVnniInt8.IsSupported,
         _ => false,
     };
 
-    // Quantize X[M,K] per 32-value block exactly as NeMo-Speech.cpp does on x86 (ggml's AVX2
-    // quantize_row_q8_0, arch/x86/quants.c): scale amax / 127 rounded to fp16, values times
-    // 127 / amax rounded half to even. A block whose scale rounds to zero is silent: all zeros
-    // (127 / amax could overflow there, and the values count for nothing anyway). A block holding
-    // NaN or infinity gets a NaN or infinite scale and all zeros: what it multiplies is lost anyway.
-    public static Q8Activations Quantize(float[] x, int m, int k) => Quantize(x, m, k, avx2: Simd);
+    const int WidestRowWithInverseScalesOnStack = 32 * 1024;
+    const float SilentBlockInverse = 0f;
 
-    // avx2: false takes the 128-bit path of CPUs without AVX2, for tests on CPUs with it.
+    public static Q8Activations Quantize(float[] x, int m, int k) => Quantize(x, m, k, avx2: HasAvx2AndFma);
+
     internal static Q8Activations Quantize(float[] x, int m, int k, bool avx2)
     {
-        if (avx2 && !Simd)
+        if (avx2 && !HasAvx2AndFma)
             throw new PlatformNotSupportedException("This CPU has no AVX2 and FMA.");
-        // The inverse scales of a row live on the stack: 4 KB at this width, 512 bytes at the model's widest.
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(k, 32 * 1024);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(k, WidestRowWithInverseScalesOnStack);
         var q = EncoderScratch.Quant(m, k);
         Parallel.For(0, m, Opt, r =>
         {
@@ -64,16 +55,12 @@ internal static unsafe class Kernels
             fixed (float* xp = x, d = q.D) fixed (sbyte* qp = q.Q) fixed (int* sums = q.Sums)
             {
                 float* row = xp + (long)r * k, scales = d + r * blocks;
-                // Three passes over the row, the fp16 rounding between the vector passes: .NET's
-                // Half conversion called while 256-bit registers were live made quantizing about
-                // four times slower (measured 2026-11-22 on a Core Ultra 7 270K Plus).
                 if (avx2) LargestMagnitudes256(row, blocks, scales); else LargestMagnitudes128(row, blocks, scales);
                 for (int b = 0; b < blocks; b++)
                 {
                     float amax = scales[b], scale = (float)(Half)(amax / 127f);
                     scales[b] = scale;
-                    // 0 marks a block of zeros; any other block's inverse is at least 127 / float.MaxValue.
-                    inverses[b] = float.IsFinite(amax) && scale != 0 ? 127f / amax : 0f;
+                    inverses[b] = float.IsFinite(amax) && scale != 0 ? 127f / amax : SilentBlockInverse;
                 }
                 if (avx2) Round256(row, blocks, inverses, qp + (long)r * k, sums + r * blocks);
                 else Round128(row, blocks, inverses, qp + (long)r * k, sums + r * blocks);
@@ -82,35 +69,28 @@ internal static unsafe class Kernels
         return q;
     }
 
-    // The largest magnitude of each block of 32, compared as integers: without their sign bits,
-    // floats order like their bits, infinity above every number and NaN above infinity, so a NaN
-    // anywhere in the block becomes its amax. Vector256.Max would spend 9 instructions per step on
-    // NaN and signed-zero rules; vmaxps would keep or drop a NaN by its position. Not inlined,
-    // like Round256, so that the 256-bit registers are cleared before Quantize's Half conversions.
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void LargestMagnitudes256(float* x, int blocks, float* largest)
     {
-        var magnitude = Vector256.Create(int.MaxValue);
+        var withoutSignBit = Vector256.Create(int.MaxValue);
         int* bits = (int*)x;
         for (int b = 0; b < blocks; b++, bits += 32)
         {
-            var m = Avx2.Max(Avx2.Max(Avx2.And(Avx.LoadVector256(bits), magnitude), Avx2.And(Avx.LoadVector256(bits + 8), magnitude)),
-                             Avx2.Max(Avx2.And(Avx.LoadVector256(bits + 16), magnitude), Avx2.And(Avx.LoadVector256(bits + 24), magnitude)));
+            var m = Avx2.Max(Avx2.Max(Avx2.And(Avx.LoadVector256(bits), withoutSignBit), Avx2.And(Avx.LoadVector256(bits + 8), withoutSignBit)),
+                             Avx2.Max(Avx2.And(Avx.LoadVector256(bits + 16), withoutSignBit), Avx2.And(Avx.LoadVector256(bits + 24), withoutSignBit)));
             var half = Sse41.Max(m.GetLower(), m.GetUpper());
             half = Sse41.Max(half, Sse2.Shuffle(half, 0b_01_00_11_10));
             largest[b] = Sse41.Max(half, Sse2.Shuffle(half, 0b_10_11_00_01)).AsSingle().ToScalar();
         }
     }
 
-    // Each block's values times its inverse scale, rounded half to even, and their sum; an inverse
-    // of 0 marks a block of zeros. The packs saturate, but the values never exceed 127.
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void Round256(float* x, int blocks, float* inverses, sbyte* q, int* sums)
     {
-        var order = Vector256.Create(0, 4, 1, 5, 2, 6, 3, 7);
+        var perHalfPackToSequentialOrder = Vector256.Create(0, 4, 1, 5, 2, 6, 3, 7);
         for (int b = 0; b < blocks; b++, x += 32, q += 32)
         {
-            if (inverses[b] == 0)
+            if (inverses[b] == SilentBlockInverse)
             {
                 Vector256<sbyte>.Zero.Store(q);
                 sums[b] = 0;
@@ -119,9 +99,8 @@ internal static unsafe class Kernels
             var inverse = Vector256.Create(inverses[b]);
             Vector256<int> ia = RoundToInt(Avx.LoadVector256(x), inverse), ib = RoundToInt(Avx.LoadVector256(x + 8), inverse);
             Vector256<int> ic = RoundToInt(Avx.LoadVector256(x + 16), inverse), ie = RoundToInt(Avx.LoadVector256(x + 24), inverse);
-            // The packs work per 128-bit half, leaving the 4-value groups as a0 b0 c0 e0 | a1 b1 c1 e1.
             var packed = Avx2.PackSignedSaturate(Avx2.PackSignedSaturate(ia, ib), Avx2.PackSignedSaturate(ic, ie));
-            Avx2.PermuteVar8x32(packed.AsInt32(), order).AsSByte().Store(q);
+            Avx2.PermuteVar8x32(packed.AsInt32(), perHalfPackToSequentialOrder).AsSByte().Store(q);
             sums[b] = Vector256.Sum(Avx2.Add(Avx2.Add(ia, ib), Avx2.Add(ic, ie)));
         }
     }
@@ -147,7 +126,7 @@ internal static unsafe class Kernels
         for (int block = 0; block < blocks; block++, x += 32, q += 32)
         {
             float inverse = inverses[block];
-            if (inverse == 0)
+            if (inverse == SilentBlockInverse)
             {
                 new Span<sbyte>(q, 32).Clear();
                 sums[block] = 0;
@@ -171,43 +150,36 @@ internal static unsafe class Kernels
         return Vector128.ConvertToInt32(Vector128.Round(x * inverse));
     }
 
-    // Packs a weight matrix (and its bias) for one int8 path, taking over m's arrays: m is not
-    // usable afterwards. The AVX2 paths interleave 8 output rows 4 bytes at a time: one 256-bit
-    // multiply-add then gives 8 dot products of 4 values each, so a block of 32 needs 8 of them
-    // and a single float scaling for 8 outputs. Each group of 8 rows keeps its place in the
-    // arrays, so packing needs no second copy; a last partial group is padded with zero scales.
-    // The portable path keeps plain rows.
-    public static Q8Weights Pack(Q8Matrix m, float[]? bias, Int8Path path)
+    public static Q8Weights Pack(Q8Matrix takenOver, float[]? bias, Int8Path path)
     {
         if (!Supports(path))
             throw new PlatformNotSupportedException($"This CPU has no {path} int8 product.");
         if (path == Int8Path.Portable)
-            return new Q8Weights(path, m.Rows, m.K, m.Q, m.D, bias);
-        int groups = (m.Rows + 7) / 8, blocks = m.K / 32;
-        var q = m.Rows % 8 == 0 ? m.Q : new sbyte[checked(groups * 8 * m.K)];
-        var d = m.Rows % 8 == 0 ? m.D : new float[groups * 8 * blocks];
-        var rows = new sbyte[8 * m.K]; var scales = new float[8 * blocks];
+            return new Q8Weights(path, takenOver.Rows, takenOver.K, takenOver.Q, takenOver.D, bias);
+        int groups = (takenOver.Rows + 7) / 8, blocks = takenOver.K / 32;
+        var q = takenOver.Rows % 8 == 0 ? takenOver.Q : new sbyte[checked(groups * 8 * takenOver.K)];
+        var d = takenOver.Rows % 8 == 0 ? takenOver.D : new float[groups * 8 * blocks];
+        var rows = new sbyte[8 * takenOver.K]; var scales = new float[8 * blocks];
         for (int g = 0; g < groups; g++)
         {
-            int count = Math.Min(8, m.Rows - g * 8);
+            int count = Math.Min(8, takenOver.Rows - g * 8);
             Array.Clear(rows); Array.Clear(scales);
-            Array.Copy(m.Q, (long)g * 8 * m.K, rows, 0, count * m.K);
-            Array.Copy(m.D, g * 8 * blocks, scales, 0, count * blocks);
+            Array.Copy(takenOver.Q, (long)g * 8 * takenOver.K, rows, 0, count * takenOver.K);
+            Array.Copy(takenOver.D, g * 8 * blocks, scales, 0, count * blocks);
             for (int j = 0; j < 8; j++)
                 for (int b = 0; b < blocks; b++)
                 {
                     d[(g * blocks + b) * 8 + j] = scales[j * blocks + b];
                     for (int c = 0; c < 8; c++)
                         for (int e = 0; e < 4; e++)
-                            q[(long)g * 8 * m.K + b * 256 + c * 32 + j * 4 + e] = rows[j * m.K + b * 32 + c * 4 + e];
+                            q[(long)g * 8 * takenOver.K + b * 256 + c * 32 + j * 4 + e] = rows[j * takenOver.K + b * 32 + c * 4 + e];
                 }
         }
         float[]? padded = null;
         if (bias is not null) { padded = new float[groups * 8]; bias.CopyTo(padded, 0); }
-        return new Q8Weights(path, m.Rows, m.K, q, d, padded);
+        return new Q8Weights(path, takenOver.Rows, takenOver.K, q, d, padded);
     }
 
-    // Y[M,N] = act(X[M,K] * W[N,K]^T + bias), X given as float and quantized here.
     public static float[] Linear(float[] x, int m, Q8Weights w, Activation activation = Activation.None)
     {
         var y = EncoderScratch.Rent(checked(m * w.Rows));
@@ -215,7 +187,6 @@ internal static unsafe class Kernels
         return y;
     }
 
-    // target[M,N] += scale * (X[M,K] * W[N,K]^T + bias): a residual step without a buffer for Y.
     public static void LinearAdd(float[] x, int m, Q8Weights w, float scale, float[] target) =>
         Product(Quantize(x, m, w.K), w, target, new Epilogue(Activation.None, Add: true, Scale: scale));
 
@@ -230,7 +201,6 @@ internal static unsafe class Kernels
         }
     }
 
-    // What happens to each output after the product and bias, done while it is still in a register.
     readonly record struct Epilogue(Activation Activation, bool Add, float Scale)
     {
         public float Apply(float v, float previous)
@@ -240,7 +210,6 @@ internal static unsafe class Kernels
         }
     }
 
-    // Each thread takes a run of 8-row weight groups, which stay in L1 while all rows of X pass.
     static void PackedQ8Gemm<TDot>(Q8Activations X, Q8Weights W, float[] Y, Epilogue e) where TDot : struct, IInt8Dot
     {
         int groups = (W.Rows + 7) / 8, threads = Math.Min(Threads, groups);
@@ -255,7 +224,6 @@ internal static unsafe class Kernels
                     int n0 = g * 8, nc = Math.Min(8, W.Rows - n0), m0 = 0;
                     if (g + 1 < end && W.Rows - n0 >= 16)
                     {
-                        // Two groups, 16 outputs, four rows at a time; the rest row by row.
                         for (; m0 + 4 <= X.Rows; m0 += 4)
                             Tile4x16<TDot>(xq + (long)m0 * X.K, xd + m0 * X.Blocks, xs + m0 * X.Blocks, X.K, X.Blocks, wg, dg, bg, y + (long)m0 * W.Rows + n0, W.Rows, e);
                         for (int m = m0; m < X.Rows; m++)
@@ -272,8 +240,6 @@ internal static unsafe class Kernels
         });
     }
 
-    // Four rows of X against two 8-row weight groups: 16 outputs per row. 5 loads feed 8
-    // multiply-adds (the 4 x 8 tile needs 5 for 4); the float sums spill, once per block.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void Tile4x16<TDot>(sbyte* x, float* xd, int* xs, int K, int blocks, sbyte* w, float* wd, float* bias, float* y, int N, Epilogue e) where TDot : struct, IInt8Dot
     {
@@ -307,7 +273,6 @@ internal static unsafe class Kernels
         Store(f3, bias, y + 3 * N, 8, e); Store(h3, b2, y + 3 * N + 8, 8, e);
     }
 
-    // Four rows of X against one 8-row weight group: 8 outputs per row.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void Tile4<TDot>(sbyte* x, float* xd, int* xs, int K, int blocks, sbyte* w, float* wd, float* bias, float* y, int N, int nc, Epilogue e) where TDot : struct, IInt8Dot
     {
@@ -364,7 +329,6 @@ internal static unsafe class Kernels
         if (nc < 8) for (int j = 0; j < nc; j++) y[j] = t[j];
     }
 
-    // One step of a packed int8 dot product: 8 lanes, each adding 4 products of x and w.
     interface IInt8Dot
     {
         static abstract Vector256<int> Start(int blockSum);
@@ -372,7 +336,6 @@ internal static unsafe class Kernels
         static abstract Vector256<int> Add(Vector256<int> sum, Vector256<sbyte> x, Vector256<sbyte> w);
     }
 
-    // Signed times signed (Arrow Lake, Lunar Lake and later).
     struct VnniInt8Dot : IInt8Dot
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Start(int blockSum) => Vector256<int>.Zero;
@@ -380,18 +343,14 @@ internal static unsafe class Kernels
         [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Add(Vector256<int> sum, Vector256<sbyte> x, Vector256<sbyte> w) => AvxVnniInt8.MultiplyWideningAndAdd(sum, x, w);
     }
 
-    // Unsigned times signed (Alder Lake and later, Zen 5): w + 128 is unsigned, so the sum is
-    // x.w + 128 * (sum of x), and starting each block at -128 * (sum of x) cancels the extra.
     struct VnniDot : IInt8Dot
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Start(int blockSum) => Vector256.Create(-128 * blockSum);
+        const int UnsignedWeightOffset = 128;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Start(int blockSum) => Vector256.Create(-UnsignedWeightOffset * blockSum);
         [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<sbyte> Weights(Vector256<sbyte> w) => w ^ Vector256.Create(sbyte.MinValue);
         [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Add(Vector256<int> sum, Vector256<sbyte> x, Vector256<sbyte> w) => AvxVnni.MultiplyWideningAndAdd(sum, w.AsByte(), x);
     }
 
-    // AVX2 only: |w| times x with the sign of w, in pairs to int16 (fits: 2 * 128 * 127), then
-    // to int32. The absolute value goes to w, as in ggml: |-128| is 128 unsigned, while x, being
-    // quantized to -127..127, can always be negated.
     struct Avx2Dot : IInt8Dot
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector256<int> Start(int blockSum) => Vector256<int>.Zero;
@@ -401,7 +360,6 @@ internal static unsafe class Kernels
             sum + Avx2.MultiplyAddAdjacent(Avx2.MultiplyAddAdjacent(Avx2.Abs(w), Avx2.Sign(x, w)), Vector256.Create((short)1));
     }
 
-    // 128-bit vectors work on every x64 CPU (SSE2) and on ARM (NEON); slower than the AVX2 tiles.
     static void PortableQ8Gemm(Q8Activations X, Q8Weights W, float[] Y, Epilogue e)
     {
         Parallel.For(0, W.Rows, Opt, n =>
@@ -418,7 +376,6 @@ internal static unsafe class Kernels
         });
     }
 
-    // The integer dot product of two 32-value int8 blocks. Products of int8 fit in int16.
     static int BlockDot(sbyte* x, sbyte* w)
     {
         var acc = Vector128<int>.Zero;
@@ -433,16 +390,14 @@ internal static unsafe class Kernels
         return Vector128.Sum(acc);
     }
 
-    // Y[M,N] = ReLU(X[M,K] * Wt[K,N] + bias) in float, Wt being the weights transposed; N a
-    // multiple of two vectors.
-    public static float[] GemmRelu(float[] x, int m, float[] wt, int n, int k, float[] bias)
+    public static float[] GemmRelu(float[] x, int m, float[] weightsTransposed, int n, int k, float[] bias)
     {
         RequireVectorPairs(n, nameof(n));
         var y = new float[(long)m * n];
         int tiles = (m + 3) / 4;
         ForRanges(tiles, (start, end) =>
         {
-            fixed (float* xp = x, wp = wt, yp = y, bp = bias)
+            fixed (float* xp = x, wp = weightsTransposed, yp = y, bp = bias)
                 for (int tile = start; tile < end; tile++)
                     FloatRows(xp + (long)tile * 4 * k, k, wp, n, yp + (long)tile * 4 * n, n, Math.Min(4, m - tile * 4), n, k, bp, relu: true);
         });
@@ -455,8 +410,6 @@ internal static unsafe class Kernels
             throw new ArgumentException($"{name} = {n} is not a multiple of {2 * Vector<float>.Count} floats.", name);
     }
 
-    // Up to 4 rows of Y[., n] = X[., k] * W[k][n] (+ bias, ReLU), with row strides ldx, ldw, ldy;
-    // n a multiple of two vectors. Tiles of 4 rows by 2 vectors keep 8 sums in registers.
     static void FloatRows(float* x, int ldx, float* w, int ldw, float* y, int ldy, int rows, int n, int k, float* bias, bool relu)
     {
         for (int n0 = 0; n0 < n; n0 += 2 * Vector<float>.Count)
@@ -502,12 +455,10 @@ internal static unsafe class Kernels
         a.Store(y); b.Store(y + Vector<float>.Count);
     }
 
-    // a * b + c, fused where the CPU can (software FMA would be far slower than the two steps).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static Vector<float> MultiplyAdd(Vector<float> a, Vector<float> b, Vector<float> c) =>
-        Simd ? Vector.FusedMultiplyAdd(a, b, c) : a * b + c;
+        HasAvx2AndFma ? Vector.FusedMultiplyAdd(a, b, c) : a * b + c;
 
-    // [rows][columns] -> [columns][stride], stride >= rows; the padding is zero.
     public static float[] Transpose(float[] a, int rows, int columns, int stride)
     {
         var t = new float[(long)columns * stride];
@@ -515,19 +466,17 @@ internal static unsafe class Kernels
         return t;
     }
 
-    // Positional projections p[P][d] as [d][stride], each head's dk rows together. The padding
-    // lets score tiles read whole vectors past the last position; those columns are ignored.
-    // Utterances over 20 s make a table per layer (13 MB at 2 min), so it comes from the scratch
-    // and is filled by all threads, 16 destination rows at a time from whole source cache lines.
+    const int DestinationRowsPerSourceCacheLine = 16;
+
     public static (float[] Table, int Stride) TransposePositions(float[] p, int P, int d)
     {
         int stride = P + 4 * Vector<float>.Count;
         var t = EncoderScratch.Rent(d * stride);
-        ForRanges((d + 15) / 16, (start, end) =>
+        ForRanges((d + DestinationRowsPerSourceCacheLine - 1) / DestinationRowsPerSourceCacheLine, (start, end) =>
         {
             for (int block = start; block < end; block++)
             {
-                int c0 = block * 16, c1 = Math.Min(d, c0 + 16);
+                int c0 = block * DestinationRowsPerSourceCacheLine, c1 = Math.Min(d, c0 + DestinationRowsPerSourceCacheLine);
                 for (int r = 0; r < P; r++)
                     for (int c = c0; c < c1; c++)
                         t[(long)c * stride + r] = p[(long)r * d + c];
@@ -538,34 +487,20 @@ internal static unsafe class Kernels
         return (t, stride);
     }
 
-    // Query rows per attention task. A task streams its head's keys, positions and values once,
-    // so 32 rows read them 8 times less often than one 4-row tile at a time: at 2 minutes a head
-    // is 2.5 MB, more L2 than a core has to itself (2 MB per E-core, 3 MB per P-core), so each
-    // read came from L3. The block's scores (32 x T floats, 210 KB at 2 minutes) stay in L2.
-    // A multiple of 4, so the row tiles, and with them every sum, are the ones a 4-row walk makes.
-    const int QueryBlock = 32;
+    const int QueryRowsPerAttentionTask = 32;
 
-    // Relative-position self-attention (Transformer-XL, as FastConformer uses it), all heads:
-    // score[i][j] = ((q_i + u).k_j + (q_i + v).p[first + T-1-i+j]) / sqrt(dk), ctx_i = softmax(score_i).V.
-    // qkv is [T][3d] (q | k | v), positions come from TransposePositions, ctx is [T][d].
     public static void RelativeAttention(float[] qkv, int T, int d, int heads, float[] u, float[] v, float[] positions, int stride, int first, float[] ctx)
     {
-        int dk = d / heads, pair = 2 * Vector<float>.Count, width = (T + pair - 1) / pair * pair, blocks = (T + QueryBlock - 1) / QueryBlock;
+        int dk = d / heads, pair = 2 * Vector<float>.Count, width = (T + pair - 1) / pair * pair, blocks = (T + QueryRowsPerAttentionTask - 1) / QueryRowsPerAttentionTask;
         RequireVectorPairs(dk, nameof(dk));
         float scale = 1f / MathF.Sqrt(dk);
-        // Per head: q + u and q + v as [h][i][e]; keys as [h][pair of key columns][e][pair], so that
-        // a score tile walks its dk rows of keys in one run (8 KB) instead of dk rows a whole width
-        // apart, each on its own page (scores 11% faster at 2 minutes); values as
-        // [h][pair of columns][j][pair] so that each pair of output columns reads one run.
         var qu = EncoderScratch.Rent(T * d);
         var qv = EncoderScratch.Rent(T * d);
-        var keys = EncoderScratch.Rent(d * width);
-        var values = EncoderScratch.Rent(T * d);
-        // Head by head, so that no element needs a division by dk, a runtime value (dropping the
-        // two divisions per element made attention 10% faster for 20 s, 5% for 2 minutes).
+        var keysInColumnPairRuns = EncoderScratch.Rent(d * width);
+        var valuesInColumnPairRuns = EncoderScratch.Rent(T * d);
         For(T, i =>
         {
-            fixed (float* row = &qkv[i * 3 * d], up = u, vp = v, qup = qu, qvp = qv, kp = keys, valuesp = values)
+            fixed (float* row = &qkv[i * 3 * d], up = u, vp = v, qup = qu, qvp = qv, kp = keysInColumnPairRuns, valuesp = valuesInColumnPairRuns)
                 for (int h = 0, c = 0; h < heads; h++)
                 {
                     float* quRow = qup + ((long)h * T + i) * dk, qvRow = qvp + ((long)h * T + i) * dk;
@@ -587,20 +522,18 @@ internal static unsafe class Kernels
         });
         For(heads * blocks, task =>
         {
-            int h = task / blocks, i0 = task % blocks * QueryBlock, rows = Math.Min(QueryBlock, T - i0);
-            var scores = ArrayPool<float>.Shared.Rent(QueryBlock * width);
-            fixed (float* s = scores, qup = qu, qvp = qv, kp = keys, pp = positions, vp = values, cp = ctx)
+            int h = task / blocks, i0 = task % blocks * QueryRowsPerAttentionTask, rows = Math.Min(QueryRowsPerAttentionTask, T - i0);
+            var scores = ArrayPool<float>.Shared.Rent(QueryRowsPerAttentionTask * width);
+            fixed (float* s = scores, qup = qu, qvp = qv, kp = keysInColumnPairRuns, pp = positions, vp = valuesInColumnPairRuns, cp = ctx)
             {
                 float* qur = qup + (h * T + i0) * dk, qvr = qvp + (h * T + i0) * dk;
                 float* kh = kp + h * dk * width, ph = pp + (long)h * dk * stride + first + T - 1 - i0;
-                // A pair of key columns, with the positions it meets, is loaded once for every row tile.
                 for (int j0 = 0; j0 < width; j0 += pair)
                     for (int r0 = 0; r0 < rows; r0 += 4)
                         if (rows - r0 >= 4) ScoreTile4(qur + r0 * dk, qvr + r0 * dk, dk, kh + j0 * dk, pair, ph + j0 - r0, stride, s + r0 * width + j0, width, scale);
                         else for (int r = r0; r < rows; r++) ScoreTile1(qur + r * dk, qvr + r * dk, dk, kh + j0 * dk, pair, ph + j0 - r, stride, s + r * width + j0, scale);
                 for (int r = 0; r < rows; r++)
                     Softmax(s + r * width, T, width);
-                // Likewise a pair of value columns for every row tile.
                 float* vh = vp + (long)h * dk * T;
                 for (int n0 = 0; n0 < dk; n0 += pair)
                     for (int r0 = 0; r0 < rows; r0 += 4)
@@ -610,8 +543,6 @@ internal static unsafe class Kernels
         });
     }
 
-    // Scores of 4 query rows against 2 vectors of key columns. Row r's position window starts
-    // one column further left than row r-1's: that is the relative shift.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void ScoreTile4(float* qu, float* qv, int dk, float* k, int ldk, float* p, int ldp, float* s, int lds, float scale)
     {
@@ -653,7 +584,6 @@ internal static unsafe class Kernels
         (a0 * scale).Store(s); (a1 * scale).Store(s + v);
     }
 
-    // Softmax over s[0..n); s[n..width) is padding and comes out zero.
     static void Softmax(float* s, int n, int width)
     {
         int v = Vector<float>.Count;
@@ -668,10 +598,6 @@ internal static unsafe class Kernels
         for (int j = 0; j < width; j += v) (Vector.Load(s + j) * inverse).Store(s + j);
     }
 
-    // The larger of two vectors of numbers (no NaN): the plain vmaxps where vectors are 256-bit AVX,
-    // as Vector.Max spends 9 instructions per step on NaN and signed-zero rules. Same Softmax output:
-    // a tie of 0 and -0 may keep either, and exp gives both the same bits. (A row holding NaN comes out
-    // all NaN either way, though not always the same NaN.)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static Vector<float> LargerOf(Vector<float> a, Vector<float> b) =>
         Vector<float>.Count == 8 && Avx.IsSupported ? Avx.Max(a.AsVector256(), b.AsVector256()).AsVector() : Vector.Max(a, b);
@@ -687,7 +613,8 @@ internal static unsafe class Kernels
         return o;
     }
 
-    // d is a multiple of the vector width (1024 and 640 here, 4 or 8 lanes).
+    const float LayerNormEpsilon = 1e-5f;
+
     static void NormRow(float* x, float* o, float* g, float* b, int d)
     {
         int n = Vector<float>.Count;
@@ -696,14 +623,13 @@ internal static unsafe class Kernels
         var mean = Vector.Sum(sum) / d;
         var squares = Vector<float>.Zero;
         for (int i = 0; i < d; i += n) { var t = Vector.Load(x + i) - new Vector<float>(mean); squares += t * t; }
-        var inverse = new Vector<float>(1f / MathF.Sqrt(Vector.Sum(squares) / d + 1e-5f));
+        var inverse = new Vector<float>(1f / MathF.Sqrt(Vector.Sum(squares) / d + LayerNormEpsilon));
         for (int i = 0; i < d; i += n)
             ((Vector.Load(x + i) - new Vector<float>(mean)) * inverse * Vector.Load(g + i) + Vector.Load(b + i)).Store(o + i);
     }
 
     public static void For(int n, Action<int> body) => Parallel.For(0, n, Opt, body);
 
-    // One contiguous run of [0, n) per thread, for work that keeps state along the run.
     public static void ForRanges(int n, Action<int, int> body)
     {
         int threads = Math.Max(1, Math.Min(Threads, n));
@@ -713,10 +639,8 @@ internal static unsafe class Kernels
     public static float Sigmoid(float v) => 1f / (1f + MathF.Exp(-v));
 }
 
-// The int8 matrix products, slowest first; Kernels.BestPath is the one this CPU uses.
 internal enum Int8Path { Portable, Avx2, AvxVnni, AvxVnniInt8 }
 
-// Weights packed for one int8 path by Kernels.Pack, with the bias added to every output.
 internal sealed class Q8Weights(Int8Path path, int rows, int k, sbyte[] q, float[] d, float[]? bias)
 {
     public Int8Path Path { get; } = path;
@@ -728,7 +652,6 @@ internal sealed class Q8Weights(Int8Path path, int rows, int k, sbyte[] q, float
     public float[]? Bias { get; } = bias;
 }
 
-// Activations quantized per 32-value block, with each block's sum of int8 values.
 internal sealed class Q8Activations(int rows, int k)
 {
     public int Rows { get; } = rows;

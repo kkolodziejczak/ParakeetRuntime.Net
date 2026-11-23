@@ -2,22 +2,24 @@ using System.Diagnostics;
 using ParakeetRuntime;
 using static ParakeetRuntime.D3D12Native;
 
-// The encoder's Q8 matrix multiplications alone, on every GPU, for comparing shader variants in seconds.
-//   --gemm-bench [--variant Entry:tile[:file.hlsl] ...] [--frames 1500,250] [--device gpu:RTX]
-// A variant is an entry point, its square output tile, and the shader file (default: the shipped Q8Gemm.hlsl);
-// without --variant both shipped kernels run. Every variant runs the encoder's shapes for each frame count and
-// reports the time per encoder layer; its output is compared with the first variant's.
 internal static unsafe class GemmBench
 {
-    // One Conformer layer: (output columns, input width, rows as a multiple of the frame count).
-    private static readonly (int N, int K, int RowsPerFrame, int Count)[] LayerShapes =
+    private static readonly (int N, int K, int RowsPerFrame, int Count)
+        FeedForwardInTwice = (4096, 1024, 1, 2),
+        FeedForwardOutTwice = (1024, 4096, 1, 2),
+        QueryKeyValue = (3072, 1024, 1, 1),
+        PositionalProjectionOf2TMinus1Rows = (1024, 1024, 2, 1),
+        AttentionOutAndPointwiseConv2 = (1024, 1024, 1, 2),
+        PointwiseConv1 = (2048, 1024, 1, 1);
+
+    private static readonly (int N, int K, int RowsPerFrame, int Count)[] ConformerLayerQ8Products =
     [
-        (4096, 1024, 1, 2), // feed-forward in, twice
-        (1024, 4096, 1, 2), // feed-forward out, twice
-        (3072, 1024, 1, 1), // q, k, v
-        (1024, 1024, 2, 1), // positions (2T - 1 rows)
-        (1024, 1024, 1, 2), // attention out, pointwise conv 2
-        (2048, 1024, 1, 1), // pointwise conv 1
+        FeedForwardInTwice,
+        FeedForwardOutTwice,
+        QueryKeyValue,
+        PositionalProjectionOf2TMinus1Rows,
+        AttentionOutAndPointwiseConv2,
+        PointwiseConv1,
     ];
 
     private sealed record Variant(string Entry, int Tile, string? File);
@@ -72,20 +74,19 @@ internal static unsafe class GemmBench
                     var layerMs = new double[variants.Count];
                     var worstDifference = new double[variants.Count];
                     var unwritten = new long[variants.Count];
-                    foreach (var shape in LayerShapes)
+                    foreach (var shape in ConformerLayerQ8Products)
                     {
-                        using var problem = new Problem(gpu, frames * shape.RowsPerFrame - (shape.RowsPerFrame - 1), shape.N, shape.K);
+                        using var problem = new RandomGemmResidentOnGpu(gpu, frames * shape.RowsPerFrame - (shape.RowsPerFrame - 1), shape.N, shape.K);
                         float[]? reference = null;
                         for (var v = 0; v < variants.Count; v++)
                         {
-                            var ms = problem.Time(pipelines[v], variants[v]);
+                            var ms = problem.BestMsPerDispatch(pipelines[v], variants[v]);
                             layerMs[v] += ms * shape.Count;
                             var output = problem.Read();
                             reference ??= output;
                             for (var i = 0; i < output.Length; i++)
                             {
-                                // Time() starts from NaN, so an output the variant never wrote stays NaN.
-                                if (float.IsNaN(output[i]))
+                                if (StillNaNSoNeverWritten(output[i]))
                                     unwritten[v]++;
                                 else
                                     worstDifference[v] = Math.Max(worstDifference[v], Math.Abs(output[i] - reference[i]) / Math.Max(1, Math.Abs(reference[i])));
@@ -109,15 +110,18 @@ internal static unsafe class GemmBench
         return 0;
     }
 
-    // Random inputs and weights of one shape, resident on the GPU.
-    private sealed class Problem : IDisposable
+    private static bool StillNaNSoNeverWritten(float output) => float.IsNaN(output);
+
+    private sealed class RandomGemmResidentOnGpu : IDisposable
     {
-        private const int Repeats = 30;
+        private const int DispatchesPerTimedSubmit = 30;
+        private const int OneWarmupAndThreeTimedSubmits = 4;
+        private const int NaNFillingWarmupSubmit = 0;
         private readonly D3D12Device gpu;
         private readonly int m, n, k;
         private readonly GpuBuffer x, wq, wd, bias, y, readback, nan;
 
-        public Problem(D3D12Device gpu, int m, int n, int k)
+        public RandomGemmResidentOnGpu(D3D12Device gpu, int m, int n, int k)
         {
             this.gpu = gpu;
             (this.m, this.n, this.k) = (m, n, k);
@@ -145,21 +149,19 @@ internal static unsafe class GemmBench
             return buffer;
         }
 
-        // Best of three submits of Repeats back-to-back dispatches, in ms per dispatch. The output starts as
-        // NaN, so Read() shows what the variant never wrote.
-        public double Time(nint pipeline, Variant variant)
+        public double BestMsPerDispatch(nint pipeline, Variant variant)
         {
             var best = double.MaxValue;
-            for (var attempt = 0; attempt < 4; attempt++)
+            for (var attempt = 0; attempt < OneWarmupAndThreeTimedSubmits; attempt++)
             {
                 gpu.BeginCommands();
-                if (attempt == 0)
+                if (attempt == NaNFillingWarmupSubmit)
                 {
                     gpu.Transition(y, D3D12_RESOURCE_STATE_COPY_DEST);
                     CopyBufferRegion(gpu.CommandList, y.Resource, 0, nan.Resource, 0, (ulong)m * (ulong)n * 4);
                 }
                 gpu.Transition(y, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                for (var r = 0; r < (attempt == 0 ? 1 : Repeats); r++)
+                for (var r = 0; r < (attempt == NaNFillingWarmupSubmit ? 1 : DispatchesPerTimedSubmit); r++)
                 {
                     SetPipelineState(gpu.CommandList, pipeline);
                     Span<uint> constants = [(uint)m, (uint)n, (uint)k, 1u, 0u, 0u, 0u, 0u];
@@ -171,8 +173,8 @@ internal static unsafe class GemmBench
                 }
                 var clock = Stopwatch.StartNew();
                 gpu.ExecuteAndWait();
-                if (attempt > 0)
-                    best = Math.Min(best, clock.Elapsed.TotalMilliseconds / Repeats);
+                if (attempt > NaNFillingWarmupSubmit)
+                    best = Math.Min(best, clock.Elapsed.TotalMilliseconds / DispatchesPerTimedSubmit);
             }
             return best;
         }

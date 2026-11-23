@@ -1,5 +1,3 @@
-// Conformer encoder elementwise, normalization, attention, and depthwise convolution shaders (SM 5.1).
-
 cbuffer Params : register(b0)
 {
     uint P0;
@@ -19,10 +17,13 @@ ByteAddressBuffer In3 : register(t3);
 
 RWByteAddressBuffer Out0 : register(u0);
 
-// -----------------------------------------------------------------------------
-// 1. LayerNorm: Out0[r, i] = (In0[r, i] - mean) / sqrt(var + 1e-5) * Gamma[i] + Beta[i]
-// Dispatch: (T, 1, 1), P0 = D
-// -----------------------------------------------------------------------------
+static const float LayerNormEpsilon = 1e-5f;
+static const uint MaxGroupsPerDispatchDimension = 65535u;
+
+static const uint AttnKTileStart = 256u;
+static const uint AttnPosTileStart = 544u;
+static const uint AttnPaddedRowFloat4s = 9u;
+
 groupshared float sLnRed[256];
 
 [numthreads(256, 1, 1)]
@@ -63,7 +64,7 @@ void LayerNormMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         if (tid < s2) sLnRed[tid] += sLnRed[tid + s2];
         GroupMemoryBarrierWithGroupSync();
     }
-    float invStd = 1.0f / sqrt(sLnRed[0] / (float)D + 1e-5f);
+    float invStd = 1.0f / sqrt(sLnRed[0] / (float)D + LayerNormEpsilon);
 
     for (uint k = tid; k < D; k += 256)
     {
@@ -75,19 +76,11 @@ void LayerNormMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 }
 
-// -----------------------------------------------------------------------------
-// 2. Relative-position multi-head self-attention (tiled FlashAttention, online softmax).
-// Tile: Br = 32 queries, Bc = 32 keys, BK = 32 head-dim elements per inner step.
-// Threadgroup: 16 x 16 = 256 threads; each thread computes 2x2 scores in Phase 1 and
-// accumulates 2 rows x 8 elements (two float4s) of O in Phase 3.
-// Factoring (q+u)*k + (q+v)*p = q*k + q*p + u*k + v*p halves Q shared storage and
-// inner-loop loads while reusing K (32x), V (32x), and PosP (16.3x) across queries.
-// In0 = QKV[T, 3*D], In1 = PosP[2*T-1, D], In2 = BiasU[D], In3 = BiasV[D], Out0 = Ctx[T, D]
-// Dispatch: ((T + 31) / 32, heads, 1), P0 = T, P1 = D, P2 = dk (multiple of 4, <= 128), P3 = asuint(scale)
-// -----------------------------------------------------------------------------
-// Reused 17.5 KB tile buffer (stride 9 float4s on sK/sP eliminates 16-way SLM bank conflicts):
-//   Phase 1: sQ[32][8] at [0..255], sK[32][9] at [256..543], sP[63][9] at [544..1110]
-//   Phase 3: sV[32][32] at [0..1023]
+float ExpTreatingNaNAsZero(float nonPositive)
+{
+    return exp(min(nonPositive, 0.0f));
+}
+
 groupshared float4 sTile[1120];
 groupshared float sS[32][33];
 groupshared float4 sU[32];
@@ -101,9 +94,9 @@ groupshared float sAlpha[32];
 [numthreads(16, 16, 1)]
 void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint tx = gtid.x;         // 0..15
-    const uint ty = gtid.y;         // 0..15
-    const uint tid = ty * 16u + tx; // 0..255
+    const uint tx = gtid.x;
+    const uint ty = gtid.y;
+    const uint tid = ty * 16u + tx;
     const uint i0 = gid.x * 32u;
     const uint hd = gid.y;
     const uint T = P0;
@@ -136,26 +129,25 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     const uint r1 = ty + 16u;
     const uint c0 = tx;
     const uint c1 = tx + 16u;
-    const uint p00 = (31u - r0) + c0; // 16..46; p01 = p00+16 (32..62), p10 = p00-16 (0..30), p11 = p00
+    const uint p00 = (31u - r0) + c0;
     const uint qBase0 = r0 << 3;
     const uint qBase1 = r1 << 3;
-    const uint kBase0 = 256u + c0 * 9u;
-    const uint kBase1 = 256u + c1 * 9u;
-    const uint pBaseA = 544u + p00 * 9u;
-    const uint pBaseB = 544u + (p00 + 16u) * 9u;
-    const uint pBaseC = 544u + (p00 - 16u) * 9u;
+    const uint kBase0 = AttnKTileStart + c0 * AttnPaddedRowFloat4s;
+    const uint kBase1 = AttnKTileStart + c1 * AttnPaddedRowFloat4s;
+    const uint pBaseA = AttnPosTileStart + p00 * AttnPaddedRowFloat4s;
+    const uint pBaseB = AttnPosTileStart + (p00 + 16u) * AttnPaddedRowFloat4s;
+    const uint pBaseC = AttnPosTileStart + (p00 - 16u) * AttnPaddedRowFloat4s;
 
-    const uint loadRow = tid >> 3; // 0..31
-    const uint loadCol = tid & 7u; // 0..7
-    const uint d0 = tx;            // 0..15 (float4 index into dk)
-    const uint d1 = tx + 16u;      // 16..31
+    const uint loadRow = tid >> 3;
+    const uint loadCol = tid & 7u;
+    const uint d0 = tx;
+    const uint d1 = tx + 16u;
 
     float4 o0a = 0, o0b = 0;
     float4 o1a = 0, o1b = 0;
 
     for (uint j0 = 0; j0 < T; j0 += 32u)
     {
-        // Phase 1: Compute 32x32 score tile S = (Q*K^T + Q*P^T + u*K^T + v*P^T) * scale
         float s00 = 0.0f, s01 = 0.0f, s10 = 0.0f, s11 = 0.0f;
         float uKAcc = 0.0f;
         float vPAcc = 0.0f;
@@ -176,14 +168,14 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
             [branch]
             if (j0 + loadRow < T && kIdx < dk4)
                 kv = asfloat(In0.Load4(((j0 + loadRow) * stride3D + D + kElem) << 2));
-            sTile[256u + loadRow * 9u + loadCol] = kv;
+            sTile[AttnKTileStart + loadRow * AttnPaddedRowFloat4s + loadCol] = kv;
 
             int pRow0 = pBase + (int)loadRow;
             float4 pv0 = 0;
             [branch]
             if (pRow0 >= 0 && (uint)pRow0 < posRows && kIdx < dk4)
                 pv0 = asfloat(In1.Load4(((uint)pRow0 * D + kElem) << 2));
-            sTile[544u + loadRow * 9u + loadCol] = pv0;
+            sTile[AttnPosTileStart + loadRow * AttnPaddedRowFloat4s + loadCol] = pv0;
 
             if (loadRow < 31u)
             {
@@ -193,7 +185,7 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
                 [branch]
                 if (pRow1 >= 0 && (uint)pRow1 < posRows && kIdx < dk4)
                     pv1 = asfloat(In1.Load4(((uint)pRow1 * D + kElem) << 2));
-                sTile[544u + pSlot1 * 9u + loadCol] = pv1;
+                sTile[AttnPosTileStart + pSlot1 * AttnPaddedRowFloat4s + loadCol] = pv1;
             }
 
             GroupMemoryBarrierWithGroupSync();
@@ -221,14 +213,14 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
             if (tid < 32u)
             {
-                uint kRowBase = 256u + tid * 9u;
+                uint kRowBase = AttnKTileStart + tid * AttnPaddedRowFloat4s;
                 [unroll]
                 for (uint kk2 = 0; kk2 < 8u; kk2++)
                     uKAcc += dot(sU[k4 + kk2], sTile[kRowBase + kk2]);
             }
             else if (tid < 95u)
             {
-                uint pRowBase = 544u + (tid - 32u) * 9u;
+                uint pRowBase = AttnPosTileStart + (tid - 32u) * AttnPaddedRowFloat4s;
                 [unroll]
                 for (uint kk3 = 0; kk3 < 8u; kk3++)
                     vPAcc += dot(sVb[k4 + kk3], sTile[pRowBase + kk3]);
@@ -246,7 +238,6 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         sS[r1][c0] = (s10 + sUK[c0] + sVP[p00 - 16u]) * scale;
         sS[r1][c1] = (s11 + sUK[c1] + sVP[p00])       * scale;
 
-        // Preload V[j0..j0+31, 0..dk-1] into sTile (free after the k4 loop barrier above).
         [unroll]
         for (uint vp = 0; vp < 4u; vp++)
         {
@@ -261,7 +252,6 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         }
         GroupMemoryBarrierWithGroupSync();
 
-        // Phase 2: Online softmax per query row (1 thread per row, bank-conflict-free stride 33).
         if (tid < 32u)
         {
             if (i0 + tid < T)
@@ -273,10 +263,7 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
                 float mOld = sM[tid];
                 float mNew = (j0 == 0u) ? mTile : max(mOld, mTile);
-                // min(x, 0) is x for every finite x here (x <= 0 after the max is taken off) and 0 for
-                // inf - inf = NaN (D3D's min returns the other operand), so a row whose score overflowed
-                // still sums to 1 instead of becoming NaN.
-                float alpha = (j0 == 0u) ? 0.0f : exp(min(mOld - mNew, 0.0f));
+                float alpha = (j0 == 0u) ? 0.0f : ExpTreatingNaNAsZero(mOld - mNew);
 
                 float lTile = 0.0f;
                 for (uint c2 = 0u; c2 < 32u; c2++)
@@ -284,7 +271,7 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
                     float w = 0.0f;
                     if (c2 < validC)
                     {
-                        w = exp(min(sS[tid][c2] - mNew, 0.0f));
+                        w = ExpTreatingNaNAsZero(sS[tid][c2] - mNew);
                         lTile += w;
                     }
                     sS[tid][c2] = w;
@@ -302,7 +289,6 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         }
         GroupMemoryBarrierWithGroupSync();
 
-        // Phase 3: O = alpha * O + W @ V
         float a0 = sAlpha[r0];
         float a1 = sAlpha[r1];
         o0a *= a0; o0b *= a0;
@@ -353,14 +339,10 @@ void RelPosAttentionMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 }
 
-// -----------------------------------------------------------------------------
-// 3. GLU: Out0[t, ch] = In0[t, ch] * sigmoid(In0[t, D + ch])
-// Dispatch: ((T * D + 255) / 256, 1, 1), P0 = T * D, P1 = D
-// -----------------------------------------------------------------------------
 [numthreads(256, 1, 1)]
 void GluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint idx = (gid.y * 65535u + gid.x) * 256u + gtid.x;
+    const uint idx = (gid.y * MaxGroupsPerDispatchDimension + gid.x) * 256u + gtid.x;
     const uint total = P0;
     if (idx >= total) return;
     const uint D = P1;
@@ -373,15 +355,10 @@ void GluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     Out0.Store(idx << 2, asuint(y));
 }
 
-// -----------------------------------------------------------------------------
-// 4. Depthwise 1D Conv + BatchNorm (pre-folded scale/shift) + SiLU
-// In0 = Glu[T, D], In1 = Dw[D, kernel], In2 = BnScale[D], In3 = BnShift[D], Out0 = Dwo[T, D]
-// Dispatch: ((T * D + 255) / 256, 1, 1), P0 = T, P1 = D, P2 = kernel
-// -----------------------------------------------------------------------------
 [numthreads(256, 1, 1)]
 void DepthwiseConvBnSiluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint idx = (gid.y * 65535u + gid.x) * 256u + gtid.x;
+    const uint idx = (gid.y * MaxGroupsPerDispatchDimension + gid.x) * 256u + gtid.x;
     const uint T = P0;
     const uint D = P1;
     if (idx >= T * D) return;

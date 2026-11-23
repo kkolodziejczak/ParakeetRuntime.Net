@@ -52,8 +52,8 @@ public sealed unsafe class D3D12KernelsTests
     [InlineData(7, 64, 19, true)]
     [InlineData(32, 128, 64, false)]
     [InlineData(65, 256, 130, true)]
-    [InlineData(455, 128, 131, true)] // Non-multiple-of-32 M and N with exact-size buffers.
-    [InlineData(97, 96, 200, false)] // Several 64-wide tiles, both edges partial: row 96 alone in a tile's lower half.
+    [InlineData(455, 128, 131, true)]
+    [InlineData(97, 96, 200, false)]
     public void Gpu_q8_linear_matches_cpu_reference(int m, int k, int n, bool withBias)
     {
         foreach (var (entry, tile) in new[] { ("Q8GemmMain", ParakeetGpu.Q8GemmLargeTile), ("Q8GemmSmallMain", ParakeetGpu.Q8GemmSmallTile) })
@@ -118,14 +118,10 @@ public sealed unsafe class D3D12KernelsTests
 
     private static int[] Bits(float[] values) => values.Select(BitConverter.SingleToInt32Bits).ToArray();
 
-    // The engine picks the kernel by row count, and serves with the small one until the large one has
-    // compiled, so on a given GPU neither an utterance's length nor when it runs may change its transcript:
-    // every epilogue, with and without bias, the last 64-row tile partial in either half or full, and the
-    // scalar path for the last columns (n % 4 != 0), bit for bit.
     [GpuTheory]
-    [InlineData(150, true)]  // last 64-row tile: 22 rows, lower half partial
-    [InlineData(170, false)] // 42 rows, upper half partial
-    [InlineData(128, false)] // whole tiles
+    [InlineData(150, true)]
+    [InlineData(170, false)]
+    [InlineData(128, false)]
     public void Gpu_q8_linear_kernels_give_the_same_bits(int m, bool withBias)
     {
         const int k = 1024, n = 203;
@@ -143,8 +139,6 @@ public sealed unsafe class D3D12KernelsTests
         });
     }
 
-    // The positional projection reads its rows through an SRV that starts inside a larger buffer, plus
-    // a byte offset; an odd row count also takes the partial-row loads.
     [GpuFact]
     public void Gpu_q8_linear_reads_its_input_at_an_srv_and_byte_offset()
     {
@@ -164,7 +158,7 @@ public sealed unsafe class D3D12KernelsTests
     [GpuFact]
     public void Gpu_q8_linear_epilogues_match_cpu_reference()
     {
-        const int m = 67, k = 64, n = 67; // a full 64-row tile, where every thread stores all its rows, then a partial one
+        const int m = 67, k = 64, n = 67;
         var random = new Random(42);
         var x = Enumerable.Range(0, m * k).Select(_ => (float)(random.NextDouble() * 2 - 1)).ToArray();
         var residual = Enumerable.Range(0, m * n).Select(_ => (float)(random.NextDouble() * 2 - 1)).ToArray();
@@ -290,11 +284,11 @@ public sealed unsafe class D3D12KernelsTests
     }
 
     [GpuTheory]
-    [InlineData(1, 256, 4)]   // Single frame, dk = 64
-    [InlineData(32, 512, 4)]  // Exact single 32x32 tile, dk = 128
-    [InlineData(65, 512, 4)]  // Multi-tile + 1-frame tail (online softmax rescaling + OOB root SRV bounds)
-    [InlineData(71, 256, 4)]  // Multi-tile + tail, dk = 64 < 128
-    [InlineData(37, 288, 3)]  // Non-power-of-two dk = 96
+    [InlineData(1, 256, 4)]
+    [InlineData(32, 512, 4)]
+    [InlineData(65, 512, 4)]
+    [InlineData(71, 256, 4)]
+    [InlineData(37, 288, 3)]
     public void Gpu_rel_pos_attention_tiles_match_cpu_reference(int t, int d, int heads)
     {
         int dk = d / heads;
@@ -345,16 +339,15 @@ public sealed unsafe class D3D12KernelsTests
         });
     }
 
-    // One frame whose score overflows to infinity: softmax over one key is 1, so the output is V.
-    // exp(inf - inf) would make it NaN.
     [GpuFact]
     public void Gpu_attention_over_one_frame_returns_its_value_even_when_the_score_overflows()
     {
         const int d = 64, heads = 2;
+        const int queryStart = 0, keyStart = d, valueStart = 2 * d;
         var qkv = new float[3 * d];
-        qkv[0] = float.PositiveInfinity; // q of head 0
-        qkv[d] = 1;                      // k of head 0
-        for (int e = 0; e < d; e++) qkv[2 * d + e] = e + 1; // v
+        qkv[queryStart] = float.PositiveInfinity;
+        qkv[keyStart] = 1;
+        for (int e = 0; e < d; e++) qkv[valueStart + e] = e + 1;
         var posP = new float[d];
         posP[0] = 1;
         var zero = new float[d];
@@ -363,7 +356,7 @@ public sealed unsafe class D3D12KernelsTests
         {
             using var probe = new EncoderOpsGpuProbe(gpu);
             var actual = probe.RelPosAttention(qkv, posP, zero, zero, 1, d, heads);
-            Assert.Equal(qkv[(2 * d)..], actual);
+            Assert.Equal(qkv[valueStart..], actual);
         });
     }
 
@@ -511,7 +504,7 @@ public sealed unsafe class D3D12KernelsTests
 
     [GpuTheory]
     [InlineData(8000)]
-    [InlineData(10)] // Very short audio with 0 valid frames (edge case).
+    [InlineData(10)]
     public void Gpu_mel_matches_cpu_reference(int sampleCount)
     {
         var path = Path.Combine(Path.GetTempPath(), $"mel-test-{Guid.NewGuid():N}.gguf");
@@ -595,8 +588,6 @@ public sealed unsafe class D3D12KernelsTests
         Assert.Null(missing);
     }
 
-    // --- Test-only GPU shader probes (kept out of the shipped Transcription assembly) ---
-
     private sealed class Q8GpuLinearProbe : IDisposable
     {
         private readonly D3D12Device gpu;
@@ -648,13 +639,11 @@ public sealed unsafe class D3D12KernelsTests
             gpu.ExecuteAndWait();
         }
 
-        // inputOffset: X starts Srv bytes into its buffer (where the SRV starts) plus Bytes (xByteOffset);
-        // the floats before it are NaN, so a read that ignores either offset spoils the output.
-        public float[] Linear(float[] x, int m, GpuEpilogue epilogue = GpuEpilogue.Store, float[]? initialY = null, (ulong Srv, uint Bytes) inputOffset = default)
+        public float[] Linear(float[] x, int m, GpuEpilogue epilogue = GpuEpilogue.Store, float[]? initialY = null, (ulong SrvStart, uint ShaderByteOffset) inputOffset = default)
         {
             int n = weight.Rows, k = weight.K;
-            ulong lead = inputOffset.Srv + inputOffset.Bytes;
-            ulong xBytes = lead + (ulong)(m * k) * 4, yBytes = (ulong)(m * n) * 4;
+            ulong nanPrefixBytes = inputOffset.SrvStart + inputOffset.ShaderByteOffset;
+            ulong xBytes = nanPrefixBytes + (ulong)(m * k) * 4, yBytes = (ulong)(m * n) * 4;
             using var xGpu = gpu.CreateDefaultBuffer(xBytes, allowUav: false);
             using var yGpu = gpu.CreateDefaultBuffer(yBytes, allowUav: true);
             using var upX = gpu.CreateUploadBuffer(xBytes);
@@ -662,8 +651,8 @@ public sealed unsafe class D3D12KernelsTests
             using var rbY = gpu.CreateReadbackBuffer(yBytes);
 
             var pX = (float*)upX.Map();
-            new Span<float>(pX, (int)(lead / 4)).Fill(float.NaN);
-            x.AsSpan(0, m * k).CopyTo(new Span<float>(pX + lead / 4, m * k)); upX.Unmap();
+            new Span<float>(pX, (int)(nanPrefixBytes / 4)).Fill(float.NaN);
+            x.AsSpan(0, m * k).CopyTo(new Span<float>(pX + nanPrefixBytes / 4, m * k)); upX.Unmap();
             if (initialY is not null && upY is not null)
             {
                 initialY.AsSpan(0, m * n).CopyTo(new Span<float>((float*)upY.Map(), m * n)); upY.Unmap();
@@ -681,9 +670,9 @@ public sealed unsafe class D3D12KernelsTests
             gpu.Transition(yGpu, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             SetPipelineState(gpu.CommandList, pso);
-            Span<uint> constants = [(uint)m, (uint)n, (uint)k, bias is not null ? 1u : 0u, (uint)epilogue, inputOffset.Bytes, 0u, 0u];
+            Span<uint> constants = [(uint)m, (uint)n, (uint)k, bias is not null ? 1u : 0u, (uint)epilogue, inputOffset.ShaderByteOffset, 0u, 0u];
             gpu.SetRootConstants(constants);
-            gpu.SetSrv(0, xGpu, inputOffset.Srv); gpu.SetSrv(1, wqBuf); gpu.SetSrv(2, wdBuf); gpu.SetSrv(3, biasBuf);
+            gpu.SetSrv(0, xGpu, inputOffset.SrvStart); gpu.SetSrv(1, wqBuf); gpu.SetSrv(2, wdBuf); gpu.SetSrv(3, biasBuf);
             gpu.SetUav(0, yGpu);
             Dispatch(gpu.CommandList, (uint)((n + tile - 1) / tile), (uint)((m + tile - 1) / tile), 1);
 

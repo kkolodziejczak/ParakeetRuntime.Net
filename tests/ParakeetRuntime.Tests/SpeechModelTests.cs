@@ -39,7 +39,7 @@ public sealed class SpeechModelTests
         var progress = new List<double>();
         var model = Model();
 
-        await model.DownloadAsync(Serving(Weights), new SyncProgress(progress.Add), CancellationToken.None);
+        await model.DownloadAsync(Serving(Weights), new InlineProgressInOrder(progress.Add), CancellationToken.None);
 
         Assert.True(model.IsInstalled);
         Assert.Equal(Weights, fs.File.ReadAllBytes(model.Path));
@@ -166,10 +166,10 @@ public sealed class SpeechModelTests
     {
         using var cancel = new CancellationTokenSource();
         var model = Model();
-        var http = new HttpClient(new StreamResponse(new DeafStream(Weights)));
+        var http = new HttpClient(new StreamResponse(new StreamWhoseReadsFinishDespiteCancel(Weights)));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            model.DownloadAsync(http, new SyncProgress(done => { if (done >= 1) cancel.Cancel(); }), cancel.Token));
+            model.DownloadAsync(http, new InlineProgressInOrder(done => { if (done >= 1) cancel.Cancel(); }), cancel.Token));
 
         Assert.False(model.IsInstalled);
     }
@@ -180,8 +180,7 @@ public sealed class SpeechModelTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) });
     }
 
-    // Like a network read already under way when the cancel comes: it finishes regardless.
-    private sealed class DeafStream(byte[] data) : MemoryStream(data)
+    private sealed class StreamWhoseReadsFinishDespiteCancel(byte[] data) : MemoryStream(data)
     {
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
             base.ReadAsync(buffer, CancellationToken.None);
@@ -196,8 +195,7 @@ public sealed class SpeechModelTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) });
     }
 
-    // Progress<T> posts to the thread pool; tests need the values in order before the await returns.
-    private sealed class SyncProgress(Action<double> report) : IProgress<double>
+    private sealed class InlineProgressInOrder(Action<double> report) : IProgress<double>
     {
         public void Report(double value) => report(value);
     }

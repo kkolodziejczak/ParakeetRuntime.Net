@@ -1,4 +1,4 @@
-// Part of the Parakeet engine; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
+// Part of ParakeetRuntime; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 namespace ParakeetRuntime;
 
 internal sealed class EncoderScratch : IDisposable
@@ -17,7 +17,6 @@ internal sealed class EncoderScratch : IDisposable
             scope.quantized[(rows,columns)]=m=new Q8Activations(rows,columns);
         return m;
     }
-    // A buffer for this layer, holding whatever the last layer left in it.
     public static float[] Rent(int length)
     {
         if(current is not {} scope) return new float[length];

@@ -1,7 +1,5 @@
 using System.Diagnostics;
 
-// A process's GPU memory over all adapters, as Task Manager shows it, from Windows' "GPU Process Memory" counters.
-// On an integrated GPU the model sits in shared memory, which also counts in the working set.
 internal sealed class GpuMemory(int processId)
 {
     private const string Category = "GPU Process Memory";
@@ -34,7 +32,6 @@ internal sealed class GpuMemory(int processId)
             }
             catch (InvalidOperationException)
             {
-                // The instance went away between listing and reading.
             }
         }
         return (dedicated, shared);

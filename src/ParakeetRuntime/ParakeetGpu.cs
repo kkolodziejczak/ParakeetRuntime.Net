@@ -12,19 +12,18 @@ internal enum GpuEpilogue : uint
 
 internal readonly record struct GpuQ8Weight(int Rows, int K, ulong QByteOffset, ulong DByteOffset, ulong BiasByteOffset, bool HasBias);
 
-// End-to-end GPU-resident Parakeet engine on D3D12 Compute:
-// Log-Mel spectrogram -> dw_striding Subsampling -> 24 Conformer layers -> joint.enc -> GPU-loop TDT decoder.
-// Everything from raw 16 kHz PCM samples to decoded token IDs runs in VRAM (typically 1 GPU submit per utterance).
 internal sealed unsafe class ParakeetGpu : IDisposable
 {
-    // Decoder steps per submit; see DecodeBatchSteps.
     internal const int MinDecodeBatchSteps = 4;
     private const int UncalibratedDecodeBatchSteps = 64;
     private const int MaxDecodeBatchSteps = 512;
     private const int MinDecodedTokensCapacity = 4096;
     private const int InlineTokenCopyCount = 1024;
-    private const double TargetSubmitMs = 350.0;
+    private const double SubmitBudgetMsUnderGpuTimeout = 350.0;
     private const uint MaxDispatchX = 65535u;
+    private const int LstmHiddenPingPongSlots = 2;
+    private const uint GemvModeJointPredFromPingPongSlot = 3u;
+    private const uint GemvModeJointOutWithFusedRelu = 4u;
 
     private readonly record struct LstmLayerGpu(ulong QByteOffset, ulong DByteOffset, uint HhQByteOffset, uint HhDByteOffset, ulong BiasByteOffset);
 
@@ -47,8 +46,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private readonly GpuQ8Weight subOutWeight, jointEncWeight, jointPredWeight, jointOutWeight;
     private readonly LstmLayerGpu[] lstmLayers;
     private readonly LayerGpu[] layers;
-    // The 64 x 64 Q8 GEMM's pipeline, compiling in the background past load and owned by this task: until
-    // it is ready, the 32 x 32 kernel serves.
     private readonly Task<nint> largeGemmCompile;
     private nint psoQ8GemmSmall, psoLn, psoAtt, psoGlu, psoDw;
     private nint psoSubConv0, psoSubDw, psoF32GemmRelu, psoSubTranspose;
@@ -57,15 +54,12 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private double msPerLayerFrame;
     private double msPerDecodeStep;
 
-    // Reusable activation scratch buffers in VRAM, grown on demand per max audio / frames / T seen.
     private int scratchSamples, scratchFrames, scratchT, decTokensCap;
     private GpuBuffer? bufAudio, bufAudioUpload;
     private GpuBuffer? bufFeats, bufSubA, bufSubB, bufFeatsUpload;
     private GpuBuffer? bufX, bufA, bufB, bufWide, bufEncProj;
     private GpuBuffer? decTokens, decTokensRb;
 
-    // Fixed-size GPU decoder state & scratch buffers (< 64 KB total).
-    // decH[i] holds two ping-pong slots (2 * predH floats) so LstmLayerCondMain reads srcSlot and writes dstSlot in one dispatch.
     private readonly GpuBuffer[] decH, decC;
     private readonly GpuBuffer decPredProj, decLogits;
     private readonly GpuBuffer decState, decStateRb, decTsRb;
@@ -148,7 +142,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         {
             for (int i = 0; i < predLayers; i++)
             {
-                decH[i] = gpu.CreateDefaultBuffer(hBytes * 2, allowUav: true);
+                decH[i] = gpu.CreateDefaultBuffer(hBytes * LstmHiddenPingPongSlots, allowUav: true);
                 decC[i] = gpu.CreateDefaultBuffer(hBytes, allowUav: true);
             }
             decPredProj = gpu.CreateDefaultBuffer((ulong)jointDim * 4, allowUav: true);
@@ -184,11 +178,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         int melBins = mel.Mels;
         GpuBuffer? wqMega = null, wdMega = null, floatMega = null;
-        // The compute pipelines compile in parallel (D3DCompile is thread-safe) once the shapes check out,
-        // while the weights upload. The 64 x 64 Q8 GEMM alone takes FXC about 2.5 s, which made loading
-        // 0.7 s longer (measured 2026-11-23, RTX 5070 Ti and Intel iGPU), so it compiles on past load:
-        // DispatchQ8Gemm uses the 32 x 32 kernel until it is ready. On the GPUs tested the two give the
-        // same bits (Gpu_q8_linear_kernels_give_the_same_bits); Q8Gemm.hlsl says why another driver may not.
         (string File, string Entry)[] shaderSpecs =
         [
             ("EncoderOps.hlsl", "LayerNormMain"),
@@ -237,7 +226,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 hhBiases[i] = g.Floats($"decoder.prediction.dec_rnn.lstm.hh_l{i}.bias");
             }
 
-            // Validate every tensor shape against model metadata and shader bounds before allocating VRAM.
             int subW3 = (((melBins - 1) / 2 + 1 - 1) / 2 + 1 - 1) / 2 + 1;
             static void Require(bool cond, string message)
             {
@@ -275,7 +263,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 Require(g.Q8Shape(p + "self_attn.linear_pos.weight") == (d, d), $"Invalid {p}linear_pos shape.");
             }
 
-            // Only a model that passed the checks above is worth compiling for.
             largeGemm = Task.Run(() => gpu.CompileEmbeddedPipeline("Q8Gemm.hlsl", "Q8GemmMain"));
             compiling = Task.Run(() => Parallel.For(0, shaderSpecs.Length, idx =>
                 compiledPsos[idx] = gpu.CompileEmbeddedPipeline(shaderSpecs[idx].File, shaderSpecs[idx].Entry)));
@@ -552,11 +539,10 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         }
         catch
         {
-            // Release the pipelines only once no compile can still store one.
-            try { compiling?.Wait(); } catch (AggregateException) { }
+            WaitUntilNoCompileCanStoreAPipeline(compiling);
             for (int i = 0; i < compiledPsos.Length; i++)
                 SafeRelease(ref compiledPsos[i]);
-            var large = FinishedLargeGemm(largeGemm);
+            var large = WaitForLargeGemmPipelineOrZero(largeGemm);
             SafeRelease(ref large);
             floatMega?.Dispose();
             wdMega?.Dispose();
@@ -564,6 +550,11 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             gpu.Dispose();
             return null;
         }
+    }
+
+    private static void WaitUntilNoCompileCanStoreAPipeline(Task? compiling)
+    {
+        try { compiling?.Wait(); } catch (AggregateException) { }
     }
 
     private void EnsureScratch(int samples, int frames, int T)
@@ -631,8 +622,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         }
     }
 
-    // Runs the entire end-to-end ASR pipeline on GPU in one primary command list:
-    // Log-Mel spectrogram -> Subsampling -> 24 Conformer layers -> joint.enc -> TDT greedy decode.
     public List<int> TranscribeAudio(float[] audio, out double encMs, out double decMs)
     {
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -660,7 +649,13 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         CopyBufferRegion(gpu.CommandList, bufAudio!.Resource, 0, bufAudioUpload.Resource, 0, audioBytes);
         gpu.Transition(bufAudio, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        // 0. GPU Log-Mel spectrogram -> bufFeats[frames, melBins]
+        RecordLogMelSpectrogram(n, frames, valid);
+
+        return RunFromFeatsInOpenCommandList(t0, H0, W0, H1, W1, H2, W2, H3, W3, T, out encMs, out decMs);
+    }
+
+    private void RecordLogMelSpectrogram(int n, int frames, int valid)
+    {
         if (bufFeats!.CurrentState == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) gpu.UavBarrier(bufFeats);
         else gpu.Transition(bufFeats, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         if (valid > 0)
@@ -669,7 +664,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             int woff = (melNFft - melWin) / 2;
             Span<uint> cm = [(uint)n, (uint)melHop, (uint)melWin, (uint)woff, (uint)melBins, BitConverter.SingleToUInt32Bits(melPreemph), (uint)valid];
             gpu.SetRootConstants(cm);
-            gpu.SetSrv(0, bufAudio);
+            gpu.SetSrv(0, bufAudio!);
             gpu.SetSrv(1, floatMega, melWinOff);
             gpu.SetSrv(2, floatMega, melFbOff);
             gpu.SetSrv(3, floatMega, melTwidOff);
@@ -682,11 +677,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         gpu.SetRootConstants(cn);
         gpu.SetUav(0, bufFeats);
         Dispatch(gpu.CommandList, (uint)melBins, 1, 1);
-
-        return RunFromFeatsInOpenCommandList(t0, H0, W0, H1, W1, H2, W2, H3, W3, T, out encMs, out decMs);
     }
 
-    // Fallback entry point when Mel runs on CPU (e.g. non-512 FFT models).
     public List<int> TranscribeFromMel(float[] feats, int frames, out double encMs, out double decMs)
     {
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -725,35 +717,26 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         uint peSliceByteOffset = (uint)((long)peStart * d * 4);
         uint scaleBits = BitConverter.SingleToUInt32Bits(1f / MathF.Sqrt(dk));
 
-        // 1. Subsampling -> curX[T, d]
-        RecordSubConv0Relu(bufFeats!, bufSubA!, H0, W0, H1, W1);
-        RecordSubDwConv(bufSubA!, bufSubB!, c2wOff, c2bOff, H1, W1, H2, W2);
-        RecordF32GemmRelu(bufSubB!, bufSubA!, c3wOff, c3bOff, H2 * W2, subCh, subCh);
-        RecordSubDwConv(bufSubA!, bufSubB!, c5wOff, c5bOff, H2, W2, H3, W3);
-        RecordF32GemmRelu(bufSubB!, bufSubA!, c6wOff, c6bOff, H3 * W3, subCh, subCh);
-        RecordSubTranspose(bufSubA!, curWide, T, W3, subCh);
-        RecordQ8Gemm(curWide, 0, curX, T, subOutWeight, GpuEpilogue.Store);
+        RecordSubsampling(H0, W0, H1, W1, H2, W2, H3, W3, T, curWide, curX);
 
-        // 2. Conformer layers -> curX[T, d], adaptively split across submissions so slow/integrated GPUs
-        // never approach the Windows 2 s TDR timeout, while fast dGPUs stay in a single fused submit.
         double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         int startLayer = 0;
-        if (msPerLayerFrame <= 0 && layers.Length > 0)
+        bool layerTimeNotYetCalibrated = msPerLayerFrame <= 0 && layers.Length > 0;
+        if (layerTimeNotYetCalibrated)
         {
-            // One-time calibration on first utterance: flush Mel+Subsample, time layer 0 alone.
             gpu.ExecuteAndWait();
             gpu.BeginCommands();
             RecordConformerLayer(layers[0], ref curX, ref curA, curB, curWide, T, P, peSliceByteOffset, scaleBits);
-            long calStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            long layer0Start = System.Diagnostics.Stopwatch.GetTimestamp();
             gpu.ExecuteAndWait();
-            double layer0Ms = (System.Diagnostics.Stopwatch.GetTimestamp() - calStart) * toMs;
+            double layer0Ms = (System.Diagnostics.Stopwatch.GetTimestamp() - layer0Start) * toMs;
             msPerLayerFrame = Math.Max(layer0Ms / Math.Max(T, 32), 1e-5);
             startLayer = 1;
             gpu.BeginCommands();
         }
 
         int layersPerSubmit = msPerLayerFrame > 0
-            ? Math.Clamp((int)(TargetSubmitMs / (msPerLayerFrame * Math.Max(T, 1))), 1, layers.Length)
+            ? Math.Clamp((int)(SubmitBudgetMsUnderGpuTimeout / (msPerLayerFrame * Math.Max(T, 1))), 1, layers.Length)
             : layers.Length;
         int layersInBatch = 0;
         for (int i = startLayer; i < layers.Length; i++)
@@ -766,20 +749,16 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 gpu.ExecuteAndWait();
                 double chunkMs = (System.Diagnostics.Stopwatch.GetTimestamp() - chunkStart) * toMs;
                 double sample = chunkMs / Math.Max(layersInBatch * T, 1);
-                msPerLayerFrame = Math.Max(msPerLayerFrame * 0.7 + sample * 0.3, sample * 0.85);
-                layersPerSubmit = Math.Clamp((int)(TargetSubmitMs / (msPerLayerFrame * Math.Max(T, 1))), 1, layers.Length);
+                msPerLayerFrame = TrackSlowerAtOnceFasterGradually(msPerLayerFrame, sample);
+                layersPerSubmit = Math.Clamp((int)(SubmitBudgetMsUnderGpuTimeout / (msPerLayerFrame * Math.Max(T, 1))), 1, layers.Length);
                 layersInBatch = 0;
                 gpu.BeginCommands();
             }
         }
 
-        // 3. Project encoder output through joint.enc into bufEncProj[T, jointDim]
         RecordQ8Gemm(curX, 0, bufEncProj!, T, jointEncWeight, GpuEpilogue.Store);
         gpu.Transition(bufEncProj!, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        // 4. Initialize decoder state and run first batch of decode steps.
-        // Slow GPUs split encoder and decoder into separate submits (TDR safety + exact wall-clock split).
-        // Fast GPUs fuse them into a single submit and use GPU timestamps for exact encoder/decoder attribution.
         bool splitSubmits = layersPerSubmit < layers.Length;
         long tEncEnd = 0;
         if (splitSubmits)
@@ -793,9 +772,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             gpu.WriteTimestamp(0);
 
         RecordInitDecoderState();
-        // Fused, the first batch shares its submit with the encoder and gets what the encoder leaves.
-        double firstBudgetMs = splitSubmits ? TargetSubmitMs : Math.Max(TargetSubmitMs - msPerLayerFrame * T * layers.Length, 0);
-        int firstBatchSteps = DecodeBatchSteps(T, firstBudgetMs, msPerDecodeStep);
+        double firstBatchBudgetMsLeftByEncoder = splitSubmits ? SubmitBudgetMsUnderGpuTimeout : Math.Max(SubmitBudgetMsUnderGpuTimeout - msPerLayerFrame * T * layers.Length, 0);
+        int firstBatchSteps = DecodeBatchSteps(T, firstBatchBudgetMsLeftByEncoder, msPerDecodeStep);
         RecordDecodeSteps(T, firstBatchSteps);
         if (useGpuTimestamps)
             gpu.WriteTimestamp(1);
@@ -806,7 +784,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         if (splitSubmits)
             LearnDecodeStepTime((tFirstDone - tEncEnd) * toMs, firstBatchSteps);
 
-        // 5. If t < T (long clip or dense tokens), continue in dynamically sized GPU batches.
         ReadDecState(out uint curT, out uint tokenCount);
         int maxTotalSteps = Math.Max(T * (maxSymbols + 1) + 256, 512);
         int stepsExecuted = firstBatchSteps;
@@ -814,7 +791,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         {
             if (stepsExecuted >= maxTotalSteps)
                 throw new InvalidOperationException("GPU decoder exceeded maximum step limit without advancing.");
-            int batchSteps = DecodeBatchSteps(T - (int)curT, TargetSubmitMs, msPerDecodeStep);
+            int batchSteps = DecodeBatchSteps(T - (int)curT, SubmitBudgetMsUnderGpuTimeout, msPerDecodeStep);
             long batchStart = System.Diagnostics.Stopwatch.GetTimestamp();
             gpu.BeginCommands();
             RecordDecodeSteps(T, batchSteps);
@@ -869,23 +846,32 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         return tokens;
     }
 
-    // Steps for the next decoder submit: enough for the frames left (a TDT step advances 0-4 frames),
-    // but only as many as fit the time budget at the measured step time, so that a slow GPU never
-    // runs one submit anywhere near Windows' 2 s GPU timeout. Until a step has been timed, 64.
-    internal static int DecodeBatchSteps(int remainingFrames, double budgetMs, double msPerStep)
+    private void RecordSubsampling(int H0, int W0, int H1, int W1, int H2, int W2, int H3, int W3, int T, GpuBuffer subsampledWide, GpuBuffer encoderInput)
     {
-        int wanted = remainingFrames * 3 / 5 + 16;
-        int fits = msPerStep > 0 ? (int)Math.Min(budgetMs / msPerStep, MaxDecodeBatchSteps) : UncalibratedDecodeBatchSteps;
-        return Math.Clamp(Math.Min(wanted, fits), MinDecodeBatchSteps, MaxDecodeBatchSteps);
+        RecordSubConv0Relu(bufFeats!, bufSubA!, H0, W0, H1, W1);
+        RecordSubDwConv(bufSubA!, bufSubB!, c2wOff, c2bOff, H1, W1, H2, W2);
+        RecordF32GemmRelu(bufSubB!, bufSubA!, c3wOff, c3bOff, H2 * W2, subCh, subCh);
+        RecordSubDwConv(bufSubA!, bufSubB!, c5wOff, c5bOff, H2, W2, H3, W3);
+        RecordF32GemmRelu(bufSubB!, bufSubA!, c6wOff, c6bOff, H3 * W3, subCh, subCh);
+        RecordSubTranspose(bufSubA!, subsampledWide, T, W3, subCh);
+        RecordQ8Gemm(subsampledWide, 0, encoderInput, T, subOutWeight, GpuEpilogue.Store);
     }
 
-    // Wall time of a decoder-only submit, recording and fence wait included, so on the safe side.
-    // Like the layer timing: a slower sample counts at once, a faster one only gradually.
-    private void LearnDecodeStepTime(double ms, int steps)
+    internal static int DecodeBatchSteps(int remainingFrames, double budgetMs, double msPerStep)
     {
-        double sample = ms / steps;
-        msPerDecodeStep = msPerDecodeStep <= 0 ? sample : Math.Max(msPerDecodeStep * 0.7 + sample * 0.3, sample * 0.85);
+        int stepsForFramesLeft = remainingFrames * 3 / 5 + 16;
+        int stepsFittingBudget = msPerStep > 0 ? (int)Math.Min(budgetMs / msPerStep, MaxDecodeBatchSteps) : UncalibratedDecodeBatchSteps;
+        return Math.Clamp(Math.Min(stepsForFramesLeft, stepsFittingBudget), MinDecodeBatchSteps, MaxDecodeBatchSteps);
     }
+
+    private void LearnDecodeStepTime(double decoderSubmitWallMs, int steps)
+    {
+        double sample = decoderSubmitWallMs / steps;
+        msPerDecodeStep = msPerDecodeStep <= 0 ? sample : TrackSlowerAtOnceFasterGradually(msPerDecodeStep, sample);
+    }
+
+    private static double TrackSlowerAtOnceFasterGradually(double previous, double sample) =>
+        Math.Max(previous * 0.7 + sample * 0.3, sample * 0.85);
 
     private void RecordConformerLayer(LayerGpu l, ref GpuBuffer curX, ref GpuBuffer curA, GpuBuffer curB, GpuBuffer curWide, int T, int P, uint peSliceByteOffset, uint scaleBits)
     {
@@ -923,7 +909,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         for (int i = 0; i < predLayers; i++)
         {
-            RecordZeroBuffer(decH[i], predH * 2);
+            RecordZeroBuffer(decH[i], predH * LstmHiddenPingPongSlots);
             RecordZeroBuffer(decC[i], predH);
         }
     }
@@ -938,92 +924,99 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         for (int step = 0; step < steps; step++)
         {
-            // 1. Fused LSTM layers (layer 0 loads embed[lastTok]; layer i>0 loads decH[i-1][dstSlot]).
-            for (int i = 0; i < predLayers; i++)
-            {
-                int nb = 0;
-                if (i == 0 && D3D12Device.TryTransition(decState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bSt))
-                    barriers[nb++] = bSt;
-                if (i > 0 && D3D12Device.TryTransition(decH[i - 1], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bPrev))
-                    barriers[nb++] = bPrev;
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decH[i]);
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decC[i]);
-                gpu.Barriers(barriers[..nb]);
-
-                var ll = lstmLayers[i];
-                SetPipelineState(gpu.CommandList, psoLstmLayer);
-                Span<uint> cl = [(uint)predH, tLim, i == 0 ? 1u : 0u, ll.HhQByteOffset, ll.HhDByteOffset];
-                gpu.SetRootConstants(cl);
-                if (i == 0) gpu.SetSrv(0, floatMega, embedOffset);
-                else gpu.SetSrv(0, decH[i - 1]);
-                gpu.SetSrv(1, wqMega, ll.QByteOffset);
-                gpu.SetSrv(2, wdMega, ll.DByteOffset);
-                gpu.SetSrv(3, floatMega, ll.BiasByteOffset);
-                gpu.SetSrv(4, decState);
-                gpu.SetUav(0, decH[i]);
-                gpu.SetUav(1, decC[i]);
-                Dispatch(gpu.CommandList, lstmGroups, 1, 1);
-            }
-
-            // 2. jointPred (mode 3: conditional on t < T && needPredict, reads decH[last][dstSlot])
-            {
-                int nb = 0;
-                if (D3D12Device.TryTransition(decH[predLayers - 1], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bH))
-                    barriers[nb++] = bH;
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decPredProj);
-                gpu.Barriers(barriers[..nb]);
-
-                SetPipelineState(gpu.CommandList, psoQ8GemvCond);
-                Span<uint> cp = [(uint)jointPredWeight.Rows, (uint)jointPredWeight.K, jointPredWeight.HasBias ? 1u : 0u, tLim, 3u];
-                gpu.SetRootConstants(cp);
-                gpu.SetSrv(0, decH[predLayers - 1]);
-                gpu.SetSrv(1, wqMega, jointPredWeight.QByteOffset);
-                gpu.SetSrv(2, wdMega, jointPredWeight.DByteOffset);
-                gpu.SetSrv(3, floatMega, jointPredWeight.BiasByteOffset);
-                gpu.SetSrv(4, decState);
-                gpu.SetUav(0, decPredProj);
-                Dispatch(gpu.CommandList, predGroups, 1, 1);
-            }
-
-            // 3. Fused JointRelu + jointOut (mode 4: conditional on t < T, reads bufEncProj[t] + decPredProj)
-            {
-                int nb = 0;
-                if (D3D12Device.TryTransition(decPredProj, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bP))
-                    barriers[nb++] = bP;
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decLogits);
-                gpu.Barriers(barriers[..nb]);
-
-                SetPipelineState(gpu.CommandList, psoQ8GemvCond);
-                Span<uint> co = [(uint)jointOutWeight.Rows, (uint)jointOutWeight.K, jointOutWeight.HasBias ? 1u : 0u, tLim, 4u];
-                gpu.SetRootConstants(co);
-                gpu.SetSrv(0, bufEncProj!);
-                gpu.SetSrv(1, wqMega, jointOutWeight.QByteOffset);
-                gpu.SetSrv(2, wdMega, jointOutWeight.DByteOffset);
-                gpu.SetSrv(3, floatMega, jointOutWeight.BiasByteOffset);
-                gpu.SetSrv(4, decState);
-                gpu.SetSrv(5, decPredProj);
-                gpu.SetUav(0, decLogits);
-                Dispatch(gpu.CommandList, outGroups, 1, 1);
-            }
-
-            // 4. ArgMax + state update + lstmSlot flip + token append
-            {
-                int nb = 0;
-                if (D3D12Device.TryTransition(decLogits, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bL))
-                    barriers[nb++] = bL;
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decState);
-                barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decTokens!);
-                gpu.Barriers(barriers[..nb]);
-
-                SetPipelineState(gpu.CommandList, psoArgMaxStep);
-                Span<uint> ca = [(uint)vocab, (uint)blank, (uint)durationCount, tLim, (uint)maxSymbols, (uint)decTokensCap, durPackedLo, durPackedHi];
-                gpu.SetRootConstants(ca);
-                gpu.SetSrv(0, decLogits);
-                gpu.SetUav(0, decState);
-                gpu.SetUav(1, decTokens!);
-                Dispatch(gpu.CommandList, 1, 1, 1);
-            }
+            RecordLstmLayers(tLim, lstmGroups, barriers);
+            RecordJointPred(tLim, predGroups, barriers);
+            RecordJointOutWithFusedRelu(tLim, outGroups, barriers);
+            RecordArgMaxAndStep(tLim, barriers);
         }
+    }
+
+    private void RecordLstmLayers(uint tLim, uint lstmGroups, Span<D3D12_RESOURCE_BARRIER> barriers)
+    {
+        for (int i = 0; i < predLayers; i++)
+        {
+            int nb = 0;
+            if (i == 0 && D3D12Device.TryTransition(decState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bSt))
+                barriers[nb++] = bSt;
+            if (i > 0 && D3D12Device.TryTransition(decH[i - 1], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bPrev))
+                barriers[nb++] = bPrev;
+            barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decH[i]);
+            barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decC[i]);
+            gpu.Barriers(barriers[..nb]);
+
+            var ll = lstmLayers[i];
+            SetPipelineState(gpu.CommandList, psoLstmLayer);
+            Span<uint> cl = [(uint)predH, tLim, i == 0 ? 1u : 0u, ll.HhQByteOffset, ll.HhDByteOffset];
+            gpu.SetRootConstants(cl);
+            if (i == 0) gpu.SetSrv(0, floatMega, embedOffset);
+            else gpu.SetSrv(0, decH[i - 1]);
+            gpu.SetSrv(1, wqMega, ll.QByteOffset);
+            gpu.SetSrv(2, wdMega, ll.DByteOffset);
+            gpu.SetSrv(3, floatMega, ll.BiasByteOffset);
+            gpu.SetSrv(4, decState);
+            gpu.SetUav(0, decH[i]);
+            gpu.SetUav(1, decC[i]);
+            Dispatch(gpu.CommandList, lstmGroups, 1, 1);
+        }
+    }
+
+    private void RecordJointPred(uint tLim, uint predGroups, Span<D3D12_RESOURCE_BARRIER> barriers)
+    {
+        int nb = 0;
+        if (D3D12Device.TryTransition(decH[predLayers - 1], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bH))
+            barriers[nb++] = bH;
+        barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decPredProj);
+        gpu.Barriers(barriers[..nb]);
+
+        SetPipelineState(gpu.CommandList, psoQ8GemvCond);
+        Span<uint> cp = [(uint)jointPredWeight.Rows, (uint)jointPredWeight.K, jointPredWeight.HasBias ? 1u : 0u, tLim, GemvModeJointPredFromPingPongSlot];
+        gpu.SetRootConstants(cp);
+        gpu.SetSrv(0, decH[predLayers - 1]);
+        gpu.SetSrv(1, wqMega, jointPredWeight.QByteOffset);
+        gpu.SetSrv(2, wdMega, jointPredWeight.DByteOffset);
+        gpu.SetSrv(3, floatMega, jointPredWeight.BiasByteOffset);
+        gpu.SetSrv(4, decState);
+        gpu.SetUav(0, decPredProj);
+        Dispatch(gpu.CommandList, predGroups, 1, 1);
+    }
+
+    private void RecordJointOutWithFusedRelu(uint tLim, uint outGroups, Span<D3D12_RESOURCE_BARRIER> barriers)
+    {
+        int nb = 0;
+        if (D3D12Device.TryTransition(decPredProj, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bP))
+            barriers[nb++] = bP;
+        barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decLogits);
+        gpu.Barriers(barriers[..nb]);
+
+        SetPipelineState(gpu.CommandList, psoQ8GemvCond);
+        Span<uint> co = [(uint)jointOutWeight.Rows, (uint)jointOutWeight.K, jointOutWeight.HasBias ? 1u : 0u, tLim, GemvModeJointOutWithFusedRelu];
+        gpu.SetRootConstants(co);
+        gpu.SetSrv(0, bufEncProj!);
+        gpu.SetSrv(1, wqMega, jointOutWeight.QByteOffset);
+        gpu.SetSrv(2, wdMega, jointOutWeight.DByteOffset);
+        gpu.SetSrv(3, floatMega, jointOutWeight.BiasByteOffset);
+        gpu.SetSrv(4, decState);
+        gpu.SetSrv(5, decPredProj);
+        gpu.SetUav(0, decLogits);
+        Dispatch(gpu.CommandList, outGroups, 1, 1);
+    }
+
+    private void RecordArgMaxAndStep(uint tLim, Span<D3D12_RESOURCE_BARRIER> barriers)
+    {
+        int nb = 0;
+        if (D3D12Device.TryTransition(decLogits, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, out var bL))
+            barriers[nb++] = bL;
+        barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decState);
+        barriers[nb++] = D3D12Device.MakeUavBarrierOrTransition(decTokens!);
+        gpu.Barriers(barriers[..nb]);
+
+        SetPipelineState(gpu.CommandList, psoArgMaxStep);
+        Span<uint> ca = [(uint)vocab, (uint)blank, (uint)durationCount, tLim, (uint)maxSymbols, (uint)decTokensCap, durPackedLo, durPackedHi];
+        gpu.SetRootConstants(ca);
+        gpu.SetSrv(0, decLogits);
+        gpu.SetUav(0, decState);
+        gpu.SetUav(1, decTokens!);
+        Dispatch(gpu.CommandList, 1, 1, 1);
     }
 
     private void CopyStateToReadback(bool resolveTimestamps)
@@ -1183,17 +1176,12 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         Dispatch(gpu.CommandList, (uint)((w.Rows + tile - 1) / tile), (uint)((M + tile - 1) / tile), 1);
     }
 
-    // Output rows and columns per thread group of Q8Gemm.hlsl's two kernels, which give the same result.
     internal const int Q8GemmLargeTile = 64, Q8GemmSmallTile = 32;
+    private const int RowsUpToWhichLargeTileUnderfillsTheGpu = 96;
 
-    // Up to 96 rows the 64 tile leaves a large GPU underfilled: on the RTX 5070 Ti it was slower than the
-    // 32 tile up to 96 rows and faster from 128 (see Q8Gemm.hlsl). That is about 7.7 s of audio for the
-    // encoder's products, and 3.9 s for the positional projection (2T - 1 rows).
-    private static int Q8GemmTile(int rows) => rows > 96 ? Q8GemmLargeTile : Q8GemmSmallTile;
+    private static int Q8GemmTile(int rows) => rows > RowsUpToWhichLargeTileUnderfillsTheGpu ? Q8GemmLargeTile : Q8GemmSmallTile;
 
-    // The pipeline a background compile made, waiting for it to finish; 0 if it failed (the 32 x 32 kernel
-    // then serves throughout; the kernel tests compile both) or never started.
-    private static nint FinishedLargeGemm(Task<nint>? compile)
+    private static nint WaitForLargeGemmPipelineOrZero(Task<nint>? compile)
     {
         try { return compile?.GetAwaiter().GetResult() ?? 0; }
         catch (Exception) { return 0; }
@@ -1252,8 +1240,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         if (disposed)
             return;
         disposed = true;
-        // Waits for a compile still running, up to about 2.5 s right after load: the device must outlive it.
-        var largeGemm = FinishedLargeGemm(largeGemmCompile);
+        var largeGemm = WaitForLargeGemmPipelineOrZero(largeGemmCompile);
         SafeRelease(ref largeGemm); SafeRelease(ref psoQ8GemmSmall); SafeRelease(ref psoLn); SafeRelease(ref psoAtt);
         SafeRelease(ref psoGlu); SafeRelease(ref psoDw);
         SafeRelease(ref psoSubConv0); SafeRelease(ref psoSubDw);

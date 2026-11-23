@@ -8,24 +8,6 @@ using System.Text.Json;
 using ParakeetRuntime;
 using NAudio.Wave;
 
-// Speed, accuracy and memory of one engine on one device, on a list of 16 kHz mono WAV clips.
-//   LocalBuddy.Spike --list-gpus
-//   LocalBuddy.Spike --corpus <list.txt | wav folder> [--device cpu|gpu|gpu:<adapter>|vulkan:N] [--nemo nemo-speech.exe]
-//                    [--affinity C03] [--passes N] [--out hyp.tsv] [--reference dev.tsv] [--compare other-hyp.tsv]
-//                    [--model parakeet.gguf] [--max-seconds S] [--limit N] [--int8-path Avx2|AvxVnni|...] [--threads N]
-//                    [--results matrix.tsv]
-// Without --nemo it runs LocalBuddy's engine: --device cpu (the default), or gpu (the adapter the app would pick),
-// or gpu:<part of the adapter name from --list-gpus>. It stops if that GPU is not used.
-// With --nemo it runs NeMo-Speech.cpp's `serve` on the same model and cores; --device is passed on (cpu or vulkan:N).
-// --reference is a dev.tsv (id, file, text); --compare is another run's --out (file, text). With either, only the
-// clips that file also has are run. --max-seconds skips longer clips (the council's corpus uses 20).
-// --int8-path picks a slower int8 kernel than the CPU's best, to time older CPUs on this one.
-// --affinity is a hex mask of the cores to run on; C03 is 4 P-cores of the Core Ultra 7 270K Plus (F0 was 4 E-cores).
-// --threads overrides LocalBuddy's CPU thread budget (by default one per fast core it may run on, at most 8).
-// --results appends one summary row per run, for the matrix.
-// Each run transcribes the first clip once untimed, then every clip once per pass.
-// GPU memory is the process's dedicated and shared usage from Windows' "GPU Process Memory" counters, read after
-// loading and after each clip (outside the timed work), so both engines are measured the same way.
 internal static class CorpusBench
 {
     public static async Task<int> RunAsync(string[] args)
@@ -45,7 +27,7 @@ internal static class CorpusBench
         if (Value("--affinity") is { } mask)
             Process.GetCurrentProcess().ProcessorAffinity = (nint)long.Parse(mask.Replace("0x", "", StringComparison.OrdinalIgnoreCase), NumberStyles.HexNumber);
         if (Value("--threads") is { } threads)
-            Kernels.UseThreads(int.Parse(threads));
+            Kernels.OverrideThreadBudgetForBenchmark(int.Parse(threads));
         var corpus = Value("--corpus") ?? throw new ArgumentException("Missing path after --corpus.");
         var reference = Value("--reference") is { } r ? Tsv.Read(r, key: 1, value: 2) : null;
         var compare = Value("--compare") is { } c ? Tsv.Read(c, key: 0, value: 1) : null;
@@ -78,7 +60,7 @@ internal static class CorpusBench
                           $"memory after load {engine.WorkingSetMegabytes:N0} MB, peak during load {engine.PeakWorkingSetMegabytes:N0} MB, GPU {gpuMemory}");
         Console.WriteLine($"{clips.Count} clips, {audioSeconds:0.0} s audio, longest {clips.Max(clip => clip.Seconds):0.0} s");
 
-        await engine.TranscribeAsync(clips[0], clips[0].Samples());
+        await engine.TranscribeAsync(clips[0], clips[0].ReadSamplesAgain());
         engine.ResetClock();
         var texts = new Dictionary<string, string>();
         var best = TimeSpan.MaxValue;
@@ -88,7 +70,7 @@ internal static class CorpusBench
             var (gcPause, fullCollections) = (GC.GetTotalPauseDuration(), GC.CollectionCount(2));
             foreach (var clip in clips)
             {
-                var samples = clip.Samples();
+                var samples = clip.ReadSamplesAgain();
                 var watch = Stopwatch.StartNew();
                 var text = await engine.TranscribeAsync(clip, samples);
                 compute += watch.Elapsed;
@@ -96,7 +78,6 @@ internal static class CorpusBench
                 gpuMemory.Sample();
             }
             best = compute < best ? compute : best;
-            // This process's garbage collections, which pause the engine's threads (and NeMo's server not at all).
             Console.WriteLine($"pass {pass}: {compute.TotalSeconds:0.00} s compute, RTF {compute.TotalSeconds / audioSeconds:0.00000}, " +
                               $"GC pauses {(GC.GetTotalPauseDuration() - gcPause).TotalSeconds:0.00} s, {GC.CollectionCount(2) - fullCollections} full collections");
         }
@@ -140,12 +121,10 @@ internal static class CorpusBench
         }
     }
 
-    // A list file (one WAV path per line) or a folder of WAVs.
-    private static IEnumerable<string> ClipPaths(string corpus) => Directory.Exists(corpus)
-        ? Directory.EnumerateFiles(corpus, "*.wav").Order(StringComparer.Ordinal)
-        : File.ReadAllLines(corpus).Where(line => line.Length > 0);
+    private static IEnumerable<string> ClipPaths(string listFileOrWavFolder) => Directory.Exists(listFileOrWavFolder)
+        ? Directory.EnumerateFiles(listFileOrWavFolder, "*.wav").Order(StringComparer.Ordinal)
+        : File.ReadAllLines(listFileOrWavFolder).Where(line => line.Length > 0);
 
-    // For example "en_us/long60" for ...\en_us\long60\list.txt.
     private static string CorpusLabel(string corpus, double maxSeconds)
     {
         var folder = Directory.Exists(corpus) ? Path.GetFullPath(corpus) : Path.GetDirectoryName(Path.GetFullPath(corpus))!;
@@ -153,7 +132,6 @@ internal static class CorpusBench
         return double.IsInfinity(maxSeconds) ? label : $"{label}<={maxSeconds}s";
     }
 
-    // Read again for each transcription, so the corpus's audio does not count as engine memory.
     private sealed record Clip(string Path, string Name, double Seconds)
     {
         public static Clip Read(string path)
@@ -162,7 +140,7 @@ internal static class CorpusBench
             return new Clip(path, System.IO.Path.GetFileName(path), reader.SampleCount / (double)Wav.SampleRate);
         }
 
-        public float[] Samples()
+        public float[] ReadSamplesAgain()
         {
             using var reader = Open(Path);
             var samples = new float[reader.SampleCount];
@@ -193,7 +171,6 @@ internal static class CorpusBench
 
     private sealed class LocalEngine(ParakeetModel model, Int8Path int8Path) : IBenchEngine
     {
-        // The GPU path only reports encoder and decoder time; the CPU path laps every stage on the clock.
         private double gpuEncoderMs, gpuDecoderMs;
 
         public static LocalEngine Load(string path, string device, Int8Path int8Path)
@@ -232,7 +209,7 @@ internal static class CorpusBench
 
         public void ResetClock()
         {
-            model.Clock = new StageClock();
+            model.BenchmarkClock = new StageClock();
             gpuEncoderMs = gpuDecoderMs = 0;
         }
 
@@ -240,7 +217,7 @@ internal static class CorpusBench
         {
             var totals = model.IsUsingGpu
                 ? [("encoder", TimeSpan.FromMilliseconds(gpuEncoderMs)), ("decoder", TimeSpan.FromMilliseconds(gpuDecoderMs))]
-                : model.Clock!.Totals.ToList();
+                : model.BenchmarkClock!.Totals.ToList();
             var all = totals.Sum(stage => stage.Item2.TotalSeconds);
             return totals.Select(stage => $"  {stage.Item1,-14} {stage.Item2.TotalSeconds,7:0.00} s  {100 * stage.Item2.TotalSeconds / all,5:0.0}%");
         }
@@ -252,8 +229,6 @@ internal static class CorpusBench
         }
     }
 
-    // NeMo-Speech.cpp, called the way LocalBuddy called it before it had its own engine.
-    // Loading counts until /ready answers, which includes the server's own warmup.
     private sealed class NemoEngine(Process process, HttpClient http, string device) : IBenchEngine
     {
         public static async Task<NemoEngine> StartAsync(string executable, string model, string device, nint affinity)
@@ -346,20 +321,19 @@ internal static class CorpusBench
 
         public override string ToString() => $"{Percent} ({Errors} of {Words} words)";
 
-        // Word error rate as the council's score.py counts it: lower case, anything but letters and digits splits words.
         public static Wer Measure(IEnumerable<(string Expected, string Actual)> pairs)
         {
             int errors = 0, words = 0;
             foreach (var (expected, actual) in pairs)
             {
-                var e = Split(expected);
-                errors += Edits(e, Split(actual));
+                var e = LowercaseWordsBetweenNonAlphanumerics(expected);
+                errors += Edits(e, LowercaseWordsBetweenNonAlphanumerics(actual));
                 words += e.Length;
             }
             return new Wer(errors, words);
         }
 
-        private static string[] Split(string text)
+        private static string[] LowercaseWordsBetweenNonAlphanumerics(string text)
         {
             var kept = new StringBuilder();
             foreach (var rune in text.ToLowerInvariant().EnumerateRunes())

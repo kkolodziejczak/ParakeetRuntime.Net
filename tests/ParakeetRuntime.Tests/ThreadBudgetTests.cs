@@ -10,17 +10,17 @@ public sealed class ThreadBudgetTests
     [Fact]
     public void A_hybrid_CPU_gets_one_thread_per_performance_core()
     {
-        // Core Ultra 7 270K Plus: 8 P-cores (efficiency class 1) and 16 E-cores (class 0).
-        var cores = Cores(8, efficiencyClass: 1).Concat(Cores(16, efficiencyClass: 0, firstCore: 8));
+        var coreUltra7_270KPlus = Cores(8, efficiencyClass: 1).Concat(Cores(16, efficiencyClass: 0, firstCore: 8));
 
-        Assert.Equal(8, ThreadBudget.For(cores));
+        Assert.Equal(8, ThreadBudget.For(coreUltra7_270KPlus));
     }
 
     [Fact]
     public void Hyper_threads_of_one_core_count_once()
     {
-        // i7-11850H: 8 cores, 16 logical processors, all the same class.
-        Assert.Equal(8, ThreadBudget.For(Cores(8, efficiencyClass: 0, threadsPerCore: 2)));
+        var i7_11850H = Cores(8, efficiencyClass: 0, threadsPerCore: 2);
+
+        Assert.Equal(8, ThreadBudget.For(i7_11850H));
     }
 
     [Fact]
@@ -38,8 +38,9 @@ public sealed class ThreadBudgetTests
     [Fact]
     public void Pinned_to_efficiency_cores_it_uses_those_cores()
     {
-        // A process allowed only E-cores sees only them, so they are its fastest cores.
-        Assert.Equal(4, ThreadBudget.For(Cores(4, efficiencyClass: 0)));
+        var allowedEfficiencyCoresOnly = Cores(4, efficiencyClass: 0);
+
+        Assert.Equal(4, ThreadBudget.For(allowedEfficiencyCoresOnly));
     }
 
     [Fact]

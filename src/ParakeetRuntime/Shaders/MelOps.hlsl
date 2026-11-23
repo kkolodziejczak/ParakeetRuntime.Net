@@ -1,7 +1,3 @@
-// GPU Log-Mel Spectrogram shaders (SM 5.1, nFft = 512):
-//   1. MelFftLogMain:    pre-emphasis + Hann window + 512-pt radix-2 FFT + mel filterbank + log
-//   2. MelNormalizeMain: per-feature mean/std normalization and invalid-frame zeroing
-
 cbuffer Params : register(b0)
 {
     uint P0;
@@ -21,14 +17,18 @@ ByteAddressBuffer In3 : register(t3);
 
 RWByteAddressBuffer Out0 : register(u0);
 
-// 1. MelFftLogMain
-// In0 = audio[nSamples], In1 = window[win], In2 = fb[nMels, 257], In3 = twiddles[1024] (cos[512] | sin[512])
-// Out0 = feats[frames, nMels]
-// Dispatch: 2D grid covering validFrames (P6 = validFrames)
-// P0 = nSamples, P1 = hop, P2 = win, P3 = woff, P4 = nMels, P5 = asuint(preemph), P6 = validFrames
+static const uint MaxGroupsPerDispatchDimension = 65535u;
+static const int FrameCentreOffset = 256;
+static const uint TwiddleSinStart = 512u;
+static const uint PowerBins = 257u;
+static const int NyquistBin = 256;
+static const int FftStages = 9;
+static const float LogGuard = 5.9604645e-8f;
+static const float MelStdEpsilon = 1e-5f;
+
 groupshared float sRe[512];
 groupshared float sIm[512];
-groupshared float sPow[257];
+groupshared float sPow[PowerBins];
 
 float ReadPreemph(uint nSamples, int aIdx, float preemph)
 {
@@ -41,16 +41,21 @@ float ReadPreemph(uint nSamples, int aIdx, float preemph)
     return cur - preemph * prev;
 }
 
+uint BitReversedFftIndex(uint i)
+{
+    return reversebits(i) >> 23;
+}
+
 [numthreads(256, 1, 1)]
 void MelFftLogMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint f = gid.y * 65535u + gid.x;
-    if (P6 != 0u && f >= P6) return;
+    const uint f = gid.y * MaxGroupsPerDispatchDimension + gid.x;
+    const uint validFrames = P6;
+    if (validFrames != 0u && f >= validFrames) return;
     const uint tid = gtid.x;
     const uint nSamples = P0, hop = P1, win = P2, woff = P3, nMels = P4;
     const float preemph = asfloat(P5);
 
-    // Load 2 samples per thread into bit-reversed positions for 512-pt DIT FFT.
     [unroll]
     for (uint p = 0; p < 2; p++)
     {
@@ -59,18 +64,17 @@ void MelFftLogMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         float val = 0.0f;
         if (wi >= 0 && wi < (int)win)
         {
-            int aIdx = (int)(f * hop + idx) - 256;
+            int aIdx = (int)(f * hop + idx) - FrameCentreOffset;
             val = ReadPreemph(nSamples, aIdx, preemph) * asfloat(In1.Load((uint)wi << 2));
         }
-        uint rev = reversebits(idx) >> 23;
+        uint rev = BitReversedFftIndex(idx);
         sRe[rev] = val;
         sIm[rev] = 0.0f;
     }
     GroupMemoryBarrierWithGroupSync();
 
-    // 9-stage radix-2 Cooley-Tukey FFT (len = 2, 4, ..., 512).
     [unroll]
-    for (uint stage = 0; stage < 9; stage++)
+    for (uint stage = 0; stage < FftStages; stage++)
     {
         uint halfLen = 1u << stage;
         uint len = halfLen << 1;
@@ -80,7 +84,7 @@ void MelFftLogMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         uint b = a + halfLen;
 
         float wr = asfloat(In3.Load((halfLen + k) << 2));
-        float wi = asfloat(In3.Load((512u + halfLen + k) << 2));
+        float wi = asfloat(In3.Load((TwiddleSinStart + halfLen + k) << 2));
 
         float ra = sRe[a], ia = sIm[a];
         float rb = sRe[b], ib = sIm[b];
@@ -92,26 +96,21 @@ void MelFftLogMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         GroupMemoryBarrierWithGroupSync();
     }
 
-    // Power spectrum (257 bins).
     sPow[tid] = sRe[tid] * sRe[tid] + sIm[tid] * sIm[tid];
     if (tid == 0)
-        sPow[256] = sRe[256] * sRe[256] + sIm[256] * sIm[256];
+        sPow[NyquistBin] = sRe[NyquistBin] * sRe[NyquistBin] + sIm[NyquistBin] * sIm[NyquistBin];
     GroupMemoryBarrierWithGroupSync();
 
-    // Mel filterbank dot product + log guard.
     if (tid < nMels)
     {
-        uint fbBase = tid * 257u;
+        uint fbBase = tid * PowerBins;
         float acc = 0.0f;
-        for (uint k = 0; k < 257u; k++)
+        for (uint k = 0; k < PowerBins; k++)
             acc += asfloat(In2.Load((fbBase + k) << 2)) * sPow[k];
-        Out0.Store((f * nMels + tid) << 2, asuint(log(acc + 5.9604645e-8f)));
+        Out0.Store((f * nMels + tid) << 2, asuint(log(acc + LogGuard)));
     }
 }
 
-// 2. MelNormalizeMain: per-feature normalization in-place on Out0[frames, nMels].
-// Dispatch: (nMels, 1, 1)
-// P0 = frames, P1 = validFrames, P2 = nMels
 groupshared float sMelRed[256];
 
 [numthreads(256, 1, 1)]
@@ -152,7 +151,7 @@ void MelNormalizeMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         GroupMemoryBarrierWithGroupSync();
     }
     float variance = valid > 1u ? sMelRed[0] / (float)(valid - 1u) : sMelRed[0];
-    float inv = 1.0f / (sqrt(variance) + 1e-5f);
+    float inv = 1.0f / (sqrt(variance) + MelStdEpsilon);
 
     for (uint f3 = tid; f3 < frames; f3 += 256u)
     {

@@ -34,6 +34,14 @@ there, because they use the app's audio capture.
 - `SpeechModel.Default()` keeps the model in `%LOCALAPPDATA%\ParakeetRuntime\models`. The tests
   that need the real model look for it there.
 
+### Engine documentation
+
+- [docs/model-and-decoding.md](docs/model-and-decoding.md): GGUF reading, Q8_0 blocks, the mel front end, encoder, TDT decoding, model install.
+- [docs/cpu-kernels.md](docs/cpu-kernels.md): the int8 CPU paths, quantization, threads and the thread budget.
+- [docs/gpu-path.md](docs/gpu-path.md): the Direct3D 12 host side: adapters, pipelines, buffers, the Q8 GEMM tiles, driver caveats.
+- [docs/gpu-shaders.md](docs/gpu-shaders.md): what every shader entry point computes, its layouts and invariants.
+- [docs/benchmarks-howto.md](docs/benchmarks-howto.md) and [docs/benchmarks.md](docs/benchmarks.md): how to measure, and every measurement so far.
+
 ### Owner's rules for the engine code
 
 - No comments in code: a reason goes into a name, and hardware-specific behaviour becomes a named

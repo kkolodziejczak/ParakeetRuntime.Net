@@ -3,12 +3,6 @@ using System.Globalization;
 using ParakeetRuntime;
 using NAudio.Wave;
 
-// Whether the speech engine's memory goes back once a meeting ends.
-//   LocalBuddy.Spike --session-memory <clip.wav> [--device cpu|gpu] [--sessions 3] [--idle-seconds 10]
-// Each session loads the engine as LiveTranscription.StartAsync does (gpu: the app's own choice; cpu: GPU off),
-// transcribes the clip, and disposes the engine as LiveTranscription.DisposeAsync does. The engine object stays
-// referenced afterwards, as the app's finished meeting holds it. Memory is then read every second with nothing
-// running, and nothing here forces a garbage collection.
 internal static class SessionMemory
 {
     public static async Task<int> RunAsync(string[] args)

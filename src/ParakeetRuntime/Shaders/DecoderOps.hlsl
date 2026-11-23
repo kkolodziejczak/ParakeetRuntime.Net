@@ -1,16 +1,3 @@
-// GPU-loop TDT greedy decoder shaders (SM 5.1).
-// All conditional shaders check decState[0] (current frame t) against T (and optionally
-// decState[4] needPredict) with a uniform early return before any shared-memory barrier,
-// so hundreds of decode steps run in a single D3D12 command list with minimal overhead.
-//
-// decState layout (uints):
-//   [0] t           (current encoder frame, 0..T)
-//   [1] symbols     (emitted symbols at current frame t)
-//   [2] tokenCount  (number of tokens written to Tokens[])
-//   [3] lastTok     (last emitted token id, or 0xFFFFFFFF initially)
-//   [4] needPredict (1 if LSTM + jointPred must run before jointOut, else 0)
-//   [5] lstmSlot    (0 or 1: ping-pong slot in decH[i] holding current h[i])
-
 cbuffer Params : register(b0)
 {
     uint P0;
@@ -33,6 +20,22 @@ ByteAddressBuffer In5 : register(t5);
 RWByteAddressBuffer Out0 : register(u0);
 RWByteAddressBuffer Out1 : register(u1);
 
+static const int DecStateFrameByte = 0;
+static const int DecStateSymbolsByte = 4;
+static const int DecStateTokenCountByte = 8;
+static const int DecStateLastTokenByte = 12;
+static const int DecStateNeedPredictByte = 16;
+static const int DecStateLstmSlotByte = 20;
+static const uint NoToken = 0xFFFFFFFFu;
+
+static const uint GemvUngated = 0u;
+static const uint GemvWhileFramesLeft = 1u;
+static const uint GemvWhilePredictPending = 2u;
+static const uint GemvJointPredFromLstmOutput = 3u;
+static const uint GemvJointOutFromEncoderPlusPred = 4u;
+
+static const float LowestFloat = -3.402823466e+38f;
+
 float DotS8x4(float4 x, uint packed)
 {
     int wi = asint(packed);
@@ -44,35 +47,30 @@ float DotS8x4(float4 x, uint packed)
     return dot(x, w);
 }
 
-// 1. InitDecStateMain: initializes decState = [0, 0, 0, 0xFFFFFFFF, 1, 0].
 [numthreads(1, 1, 1)]
 void InitDecStateMain()
 {
-    Out0.Store(0, 0u);          // t = 0
-    Out0.Store(4, 0u);          // symbols = 0
-    Out0.Store(8, 0u);          // tokenCount = 0
-    Out0.Store(12, 0xFFFFFFFFu);// lastTok = -1
-    Out0.Store(16, 1u);         // needPredict = 1
-    Out0.Store(20, 0u);         // lstmSlot = 0
+    Out0.Store(DecStateFrameByte, 0u);
+    Out0.Store(DecStateSymbolsByte, 0u);
+    Out0.Store(DecStateTokenCountByte, 0u);
+    Out0.Store(DecStateLastTokenByte, NoToken);
+    Out0.Store(DecStateNeedPredictByte, 1u);
+    Out0.Store(DecStateLstmSlotByte, 0u);
 }
 
-// 2. ZeroBufferMain: P0 = floatCount
 [numthreads(256, 1, 1)]
 void ZeroBufferMain(uint3 dtid : SV_DispatchThreadID)
 {
-    if (dtid.x < P0)
+    const uint floatCount = P0;
+    if (dtid.x < floatCount)
         Out0.Store(dtid.x << 2, 0u);
 }
 
-// 3. LstmLayerCondMain: fused (embed/prev-h load + ih*x + hh*h + bias + LSTM cell update).
-// Reads h from Out0[srcSlot*H..] and writes new h to Out0[dstSlot*H..] (disjoint ping-pong slots),
-// and updates c in-place in Out1[0..H-1].
-// In0 = embed[vocab, H] (if P2 != 0) or prevLayer decH[2*H] (reads dstSlot*H, if P2 == 0)
-// In1 = wqMega + ih.QByteOffset (hh at +P3), In2 = wdMega + ih.DByteOffset (hh at +P4)
-// In3 = pre-summed (ihBias + hhBias)[4*H], StateIn = decState
-// Out0 = decH[i] (2*H floats), Out1 = decC[i] (H floats)
-// Dispatch: ((H + 7) / 8, 1, 1)
-// P0 = H (<= 1024, multiple of 32), P1 = T, P2 = useEmbed (0 or 1), P3 = hhQByteOffset, P4 = hhDByteOffset
+bool LstmInputIsEmbedding()
+{
+    return P2 != 0u;
+}
+
 groupshared float4 sLstmX4[256];
 groupshared float4 sLstmH4[256];
 groupshared float sLstmRed[32][4];
@@ -80,24 +78,27 @@ groupshared float sLstmRed[32][4];
 [numthreads(128, 1, 1)]
 void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    if (StateIn.Load(0) >= P1 || StateIn.Load(16) == 0u) return;
+    const uint T = P1;
+    if (StateIn.Load(DecStateFrameByte) >= T || StateIn.Load(DecStateNeedPredictByte) == 0u) return;
 
     const uint tid = gtid.x;
     const uint H = P0;
+    const uint hhQByteOffset = P3;
+    const uint hhDByteOffset = P4;
     const uint h4 = H >> 2;
     const uint kBlocks = H >> 5;
-    const uint srcSlot = StateIn.Load(20);
+    const uint srcSlot = StateIn.Load(DecStateLstmSlotByte);
     const uint dstSlot = 1u - srcSlot;
-    const uint label = StateIn.Load(12);
+    const uint label = StateIn.Load(DecStateLastTokenByte);
 
     for (uint i = tid; i < h4; i += 128u)
     {
         float4 xv = 0;
         [branch]
-        if (P2 != 0u)
+        if (LstmInputIsEmbedding())
         {
             [branch]
-            if (label != 0xFFFFFFFFu)
+            if (label != NoToken)
                 xv = asfloat(In0.Load4((label * H + (i << 2)) << 2));
         }
         else
@@ -109,11 +110,10 @@ void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
     GroupMemoryBarrierWithGroupSync();
 
-    // 128 threads = 32 gate rows (4 gates x 8 hidden units) x 4 lanes along K.
-    const uint row = tid >> 2;   // 0..31
-    const uint lane = tid & 3u;  // 0..3
-    const uint gate = row >> 3;  // 0..3 (i, f, g, o)
-    const uint unit = row & 7u;  // 0..7
+    const uint gateRow = tid >> 2;
+    const uint lane = tid & 3u;
+    const uint gate = gateRow >> 3;
+    const uint unit = gateRow & 7u;
     const uint k = gid.x * 8u + unit;
 
     float acc = 0.0f;
@@ -132,8 +132,8 @@ void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
             uint4 qaI = In1.Load4(qByteI);
             uint4 qbI = In1.Load4(qByteI + 16u);
 
-            float scaleH = f16tof32((In2.Load(P4 + dOff) >> shift) & 0xFFFFu);
-            uint qByteH = P3 + qByteI;
+            float scaleH = f16tof32((In2.Load(hhDByteOffset + dOff) >> shift) & 0xFFFFu);
+            uint qByteH = hhQByteOffset + qByteI;
             uint4 qaH = In1.Load4(qByteH);
             uint4 qbH = In1.Load4(qByteH + 16u);
 
@@ -154,7 +154,7 @@ void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         }
     }
 
-    sLstmRed[row][lane] = acc;
+    sLstmRed[gateRow][lane] = acc;
     GroupMemoryBarrierWithGroupSync();
 
     [branch]
@@ -189,29 +189,20 @@ void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 }
 
-// 4. Q8GemvCondMain: M = 1 vectorized Q8_0 GEMV with optional GPU state gating and fused input modes.
-// 64 threads = 16 output rows x 4 lanes along K -> Dispatch: ((N + 15) / 16, 1, 1).
-// In0 = X[K] (or encProj[T, K] when mode == 4), In1 = Wq[N, K], In2 = Wd[N, K/32], In3 = Bias[N],
-// StateIn = decState (when P4 != 0), In5 = predProj[K] (when mode == 4). Out0 = Y[N].
-// P0 = N, P1 = K (<= 1024, multiple of 32), P2 = hasBias, P3 = T,
-// P4 = mode:
-//   0 = unconditional, plain In0[0..K-1]
-//   1 = gate t < T, plain In0[0..K-1]
-//   2 = gate t < T && needPredict, plain In0[0..K-1]
-//   3 = gate t < T && needPredict, ping-pong In0[(1 - lstmSlot)*K..] (jointPred reading decH)
-//   4 = gate t < T, fused JointRelu: max(0, In0[t*K + i] + In5[i]) (jointOut)
 groupshared float4 sGemv1X4[256];
 groupshared float sGemv1Red[16][4];
 
 [numthreads(64, 1, 1)]
 void Q8GemvCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
+    const uint T = P3;
+    const uint mode = P4;
     uint tCur = 0u;
-    if (P4 != 0u)
+    if (mode != GemvUngated)
     {
-        tCur = StateIn.Load(0);
-        if (tCur >= P3) return;
-        if ((P4 == 2u || P4 == 3u) && StateIn.Load(16) == 0u) return;
+        tCur = StateIn.Load(DecStateFrameByte);
+        if (tCur >= T) return;
+        if ((mode == GemvWhilePredictPending || mode == GemvJointPredFromLstmOutput) && StateIn.Load(DecStateNeedPredictByte) == 0u) return;
     }
 
     const uint tid = gtid.x;
@@ -220,7 +211,7 @@ void Q8GemvCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     const uint kBlocks = K >> 5;
 
     [branch]
-    if (P4 == 4u)
+    if (mode == GemvJointOutFromEncoderPlusPred)
     {
         const uint encBase = tCur * K;
         for (uint i = tid; i < k4; i += 64u)
@@ -232,14 +223,14 @@ void Q8GemvCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
     else
     {
-        const uint xBase = (P4 == 3u) ? ((1u - StateIn.Load(20)) * K) : 0u;
+        const uint xBase = (mode == GemvJointPredFromLstmOutput) ? ((1u - StateIn.Load(DecStateLstmSlotByte)) * K) : 0u;
         for (uint i = tid; i < k4; i += 64u)
             sGemv1X4[i] = asfloat(In0.Load4((xBase + (i << 2)) << 2));
     }
     GroupMemoryBarrierWithGroupSync();
 
-    const uint row = tid >> 2;  // 0..15
-    const uint lane = tid & 3u; // 0..3
+    const uint row = tid >> 2;
+    const uint lane = tid & 3u;
     const uint gn = gid.x * 16u + row;
 
     float acc = 0.0f;
@@ -280,25 +271,27 @@ void Q8GemvCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 }
 
-// 5. ArgMaxAndStepMain: finds argmax(logits[0..vocab-1]) and argmax(logits[vocab..vocab+numDur-1]),
-// advances decState (Out0), flips lstmSlot if LSTM ran this step, and appends non-blank token to Out1.
-// In0 = logits[vocab + numDur], Out0 = decState, Out1 = Tokens[maxTokens]
-// P0 = vocab, P1 = blank, P2 = numDur, P3 = T, P4 = maxSymbols, P5 = maxTokens, P6 = durPackedLo, P7 = durPackedHi
 groupshared float sMaxVal[256];
 groupshared uint sMaxIdx[256];
 
 [numthreads(256, 1, 1)]
 void ArgMaxAndStepMain(uint3 gtid : SV_GroupThreadID)
 {
-    const uint t = Out0.Load(0);
-    const bool active = (t < P3);
-
-    const uint tid = gtid.x;
     const uint vocab = P0;
     const uint blank = P1;
     const uint numDur = P2;
+    const uint T = P3;
+    const uint maxSymbolsPerFrame = P4;
+    const uint maxTokens = P5;
+    const uint durationsPackedLo = P6;
+    const uint durationsPackedHi = P7;
 
-    float bestVal = -3.402823466e+38f;
+    const uint t = Out0.Load(DecStateFrameByte);
+    const bool active = (t < T);
+
+    const uint tid = gtid.x;
+
+    float bestVal = LowestFloat;
     uint bestIdx = 0;
     if (active)
     {
@@ -347,38 +340,38 @@ void ArgMaxAndStepMain(uint3 gtid : SV_GroupThreadID)
             }
         }
 
-        uint durWord = (bestDur < 4u) ? P6 : P7;
+        uint durWord = (bestDur < 4u) ? durationsPackedLo : durationsPackedHi;
         uint skip = (durWord >> ((bestDur & 3u) * 8u)) & 0xFFu;
         if (tok == blank && skip == 0u) skip = 1u;
 
-        if (Out0.Load(16) != 0u)
-            Out0.Store(20, 1u - Out0.Load(20));
+        if (Out0.Load(DecStateNeedPredictByte) != 0u)
+            Out0.Store(DecStateLstmSlotByte, 1u - Out0.Load(DecStateLstmSlotByte));
 
         uint needPred = 0u;
         if (tok != blank)
         {
-            uint tc = Out0.Load(8);
-            if (tc < P5)
+            uint tc = Out0.Load(DecStateTokenCountByte);
+            if (tc < maxTokens)
                 Out1.Store(tc << 2, tok);
-            Out0.Store(8, tc + 1u);
-            Out0.Store(12, tok);
+            Out0.Store(DecStateTokenCountByte, tc + 1u);
+            Out0.Store(DecStateLastTokenByte, tok);
             needPred = 1u;
         }
 
-        uint syms = Out0.Load(4) + 1u;
+        uint syms = Out0.Load(DecStateSymbolsByte) + 1u;
         uint tNew = t + skip;
         if (skip > 0u)
         {
             syms = 0u;
         }
-        else if (syms >= P4)
+        else if (syms >= maxSymbolsPerFrame)
         {
             tNew += 1u;
             syms = 0u;
         }
 
-        Out0.Store(0, tNew);
-        Out0.Store(4, syms);
-        Out0.Store(16, needPred);
+        Out0.Store(DecStateFrameByte, tNew);
+        Out0.Store(DecStateSymbolsByte, syms);
+        Out0.Store(DecStateNeedPredictByte, needPred);
     }
 }

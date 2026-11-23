@@ -1,14 +1,14 @@
-// Part of the Parakeet engine; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
+// Part of ParakeetRuntime; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 namespace ParakeetRuntime;
 
 internal sealed class Mel
 {
     readonly int nFft, hop, win, nMels, nBins;
     readonly float preemph;
-    readonly float[] window, fb; // fb[m * nBins + k]
-    readonly int[] firstBin, endBin; // each filter's nonzero bins: the rest add exactly zero
-    readonly double[] cos, sin; // FFT twiddles, stage by stage, as the butterflies computed them
-    const float LogGuard = 5.9604645e-8f; // 2^-24
+    readonly float[] window, fb;
+    readonly int[] firstNonzeroBin, endNonzeroBin;
+    readonly double[] stageTwiddleCos, stageTwiddleSin;
+    const float LogGuard = 5.9604645e-8f;
 
     public Mel(Gguf g)
     {
@@ -20,22 +20,28 @@ internal sealed class Mel
         preemph = g.Float("asr.preprocessor.preemph");
         nBins = nFft / 2 + 1;
         fb = g.Floats("preprocessor.fb");
-        window = new float[win]; // symmetric Hann (hann_periodic = false)
-        for (int i = 0; i < win; i++) window[i] = (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (win - 1)));
-        firstBin = new int[nMels]; endBin = new int[nMels];
+        window = SymmetricHannWindow(win);
+        firstNonzeroBin = new int[nMels]; endNonzeroBin = new int[nMels];
         for (int m = 0; m < nMels; m++)
         {
             int first = 0, end = nBins;
             while (first < end && fb[m * nBins + first] == 0) first++;
             while (end > first && fb[m * nBins + end - 1] == 0) end--;
-            (firstBin[m], endBin[m]) = (first, end);
+            (firstNonzeroBin[m], endNonzeroBin[m]) = (first, end);
         }
-        cos = new double[nFft]; sin = new double[nFft];
+        stageTwiddleCos = new double[nFft]; stageTwiddleSin = new double[nFft];
         for (int len = 2, at = 0; len <= nFft; at += len / 2, len <<= 1)
         {
             double ang = -2 * Math.PI / len;
-            for (int k = 0; k < len / 2; k++) { cos[at + k] = Math.Cos(ang * k); sin[at + k] = Math.Sin(ang * k); }
+            for (int k = 0; k < len / 2; k++) { stageTwiddleCos[at + k] = Math.Cos(ang * k); stageTwiddleSin[at + k] = Math.Sin(ang * k); }
         }
+    }
+
+    static float[] SymmetricHannWindow(int win)
+    {
+        var window = new float[win];
+        for (int i = 0; i < win; i++) window[i] = (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (win - 1)));
+        return window;
     }
 
     public int Mels => nMels;
@@ -46,19 +52,17 @@ internal sealed class Mel
     public float[] Window => window;
     public float[] Filterbank => fb;
 
-    // Packs stage twiddles as [cos[halfLen + k] | sin[halfLen + k]] for MelOps.hlsl (offset +1 from CPU stage table).
     public float[] BuildTwiddlesF32()
     {
-        var t = new float[nFft * 2];
+        var packed = new float[nFft * 2];
         for (int i = 0; i < nFft - 1; i++)
         {
-            t[i + 1] = (float)cos[i];
-            t[nFft + i + 1] = (float)sin[i];
+            packed[i + 1] = (float)stageTwiddleCos[i];
+            packed[nFft + i + 1] = (float)stageTwiddleSin[i];
         }
-        return t;
+        return packed;
     }
 
-    // Returns features[frame * nMels + mel] and the frame count.
     public float[] Compute(float[] audio, out int frames)
     {
         int n = audio.Length;
@@ -79,7 +83,7 @@ internal sealed class Mel
                 for (int m = 0; m < nMels; m++)
                 {
                     float acc = 0;
-                    for (int k = firstBin[m]; k < endBin[m]; k++) acc += fb[m * nBins + k] * power[k];
+                    for (int k = firstNonzeroBin[m]; k < endNonzeroBin[m]; k++) acc += fb[m * nBins + k] * power[k];
                     feats[f * nMels + m] = f < valid ? MathF.Log(acc + LogGuard) : 0f;
                 }
             }
@@ -111,7 +115,7 @@ internal sealed class Mel
             for (int i = 0; i < n; i += len)
                 for (int k = 0; k < len / 2; k++)
                 {
-                    double wr = cos[at + k], wi = sin[at + k];
+                    double wr = stageTwiddleCos[at + k], wi = stageTwiddleSin[at + k];
                     int a = i + k, b = a + len / 2;
                     double xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
                     re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;

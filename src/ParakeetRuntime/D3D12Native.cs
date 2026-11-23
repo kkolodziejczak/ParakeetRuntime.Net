@@ -2,8 +2,6 @@ using System.Runtime.InteropServices;
 
 namespace ParakeetRuntime;
 
-// Minimal Direct3D 12, DXGI, and D3DCompiler P/Invoke and COM vtable bindings.
-// Uses only inbox Windows DLLs (d3d12.dll, dxgi.dll, d3dcompiler_47.dll, kernel32.dll).
 internal static unsafe class D3D12Native
 {
     public static readonly Guid IID_IDXGIFactory1 = new("770aae78-f26f-4dba-a829-253c83d1b387");
@@ -83,8 +81,6 @@ internal static unsafe class D3D12Native
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern int CloseHandle(nint hObject);
-
-    // --- Structs matching Windows SDK 10.0.26100.0 (x64) ---
 
     [StructLayout(LayoutKind.Sequential)]
     public struct LUID
@@ -183,11 +179,9 @@ internal static unsafe class D3D12Native
     public struct D3D12_ROOT_PARAMETER
     {
         [FieldOffset(0)] public uint ParameterType;
-        // D3D12_ROOT_CONSTANTS (offset 8)
         [FieldOffset(8)] public uint ShaderRegister;
         [FieldOffset(12)] public uint RegisterSpace;
         [FieldOffset(16)] public uint Num32BitValues;
-        // ShaderVisibility (offset 24)
         [FieldOffset(24)] public uint ShaderVisibility;
     }
 
@@ -230,7 +224,6 @@ internal static unsafe class D3D12Native
     {
         [FieldOffset(0)] public uint Type;
         [FieldOffset(4)] public uint Flags;
-        // Transition & UAV share pResource at offset 8
         [FieldOffset(8)] public nint pResource;
         [FieldOffset(16)] public uint Subresource;
         [FieldOffset(20)] public uint StateBefore;
@@ -254,8 +247,6 @@ internal static unsafe class D3D12Native
         };
     }
 
-    // --- COM vtable call helpers ---
-
     private static void** Vtbl(nint obj) => *(void***)obj;
 
     public static int QueryInterface(nint obj, Guid* riid, nint* ppv) =>
@@ -273,30 +264,24 @@ internal static unsafe class D3D12Native
         }
     }
 
-    // IDXGIFactory1 [12] EnumAdapters1
     public static int EnumAdapters1(nint factory, uint index, nint* ppAdapter) =>
         ((delegate* unmanaged[Stdcall]<nint, uint, nint*, int>)Vtbl(factory)[12])(factory, index, ppAdapter);
 
-    // IDXGIFactory6 [29] EnumAdapterByGpuPreference
     public static int EnumAdapterByGpuPreference(nint factory6, uint index, uint preference, Guid* riid, nint* ppAdapter) =>
         ((delegate* unmanaged[Stdcall]<nint, uint, uint, Guid*, nint*, int>)Vtbl(factory6)[29])(factory6, index, preference, riid, ppAdapter);
 
-    // IDXGIAdapter1 [10] GetDesc1
     public static int GetDesc1(nint adapter, DXGI_ADAPTER_DESC1* pDesc) =>
         ((delegate* unmanaged[Stdcall]<nint, DXGI_ADAPTER_DESC1*, int>)Vtbl(adapter)[10])(adapter, pDesc);
 
-    // IDXGIAdapter3 [14] QueryVideoMemoryInfo
     public static int QueryVideoMemoryInfo(nint adapter3, uint nodeIndex, uint memorySegmentGroup, DXGI_QUERY_VIDEO_MEMORY_INFO* pInfo) =>
         ((delegate* unmanaged[Stdcall]<nint, uint, uint, DXGI_QUERY_VIDEO_MEMORY_INFO*, int>)Vtbl(adapter3)[14])(adapter3, nodeIndex, memorySegmentGroup, pInfo);
 
-    // ID3D10Blob [3] GetBufferPointer, [4] GetBufferSize
     public static nint GetBufferPointer(nint blob) =>
         ((delegate* unmanaged[Stdcall]<nint, nint>)Vtbl(blob)[3])(blob);
 
     public static nuint GetBufferSize(nint blob) =>
         ((delegate* unmanaged[Stdcall]<nint, nuint>)Vtbl(blob)[4])(blob);
 
-    // ID3D12Device
     public static int CreateCommandQueue(nint device, D3D12_COMMAND_QUEUE_DESC* desc, Guid* riid, nint* ppQueue) =>
         ((delegate* unmanaged[Stdcall]<nint, D3D12_COMMAND_QUEUE_DESC*, Guid*, nint*, int>)Vtbl(device)[8])(device, desc, riid, ppQueue);
 
@@ -327,7 +312,6 @@ internal static unsafe class D3D12Native
     public static int CreateQueryHeap(nint device, D3D12_QUERY_HEAP_DESC* desc, Guid* riid, nint* ppvHeap) =>
         ((delegate* unmanaged[Stdcall]<nint, D3D12_QUERY_HEAP_DESC*, Guid*, nint*, int>)Vtbl(device)[39])(device, desc, riid, ppvHeap);
 
-    // ID3D12CommandQueue
     public static void ExecuteCommandLists(nint queue, uint numLists, nint* ppLists) =>
         ((delegate* unmanaged[Stdcall]<nint, uint, nint*, void>)Vtbl(queue)[10])(queue, numLists, ppLists);
 
@@ -337,11 +321,9 @@ internal static unsafe class D3D12Native
     public static int GetTimestampFrequency(nint queue, ulong* pFrequency) =>
         ((delegate* unmanaged[Stdcall]<nint, ulong*, int>)Vtbl(queue)[16])(queue, pFrequency);
 
-    // ID3D12CommandAllocator
     public static int AllocatorReset(nint allocator) =>
         ((delegate* unmanaged[Stdcall]<nint, int>)Vtbl(allocator)[8])(allocator);
 
-    // ID3D12GraphicsCommandList
     public static int ListClose(nint list) =>
         ((delegate* unmanaged[Stdcall]<nint, int>)Vtbl(list)[9])(list);
 
@@ -379,7 +361,6 @@ internal static unsafe class D3D12Native
         ((delegate* unmanaged[Stdcall]<nint, nint, uint, uint, uint, nint, ulong, void>)Vtbl(list)[54])(
             list, queryHeap, type, startIndex, numQueries, destinationBuffer, alignedDestinationBufferOffset);
 
-    // ID3D12Resource
     public static int Map(nint resource, uint subresource, D3D12_RANGE* readRange, void** ppData) =>
         ((delegate* unmanaged[Stdcall]<nint, uint, D3D12_RANGE*, void**, int>)Vtbl(resource)[8])(resource, subresource, readRange, ppData);
 
@@ -389,7 +370,6 @@ internal static unsafe class D3D12Native
     public static ulong GetGPUVirtualAddress(nint resource) =>
         ((delegate* unmanaged[Stdcall]<nint, ulong>)Vtbl(resource)[11])(resource);
 
-    // ID3D12Fence
     public static ulong GetCompletedValue(nint fence) =>
         ((delegate* unmanaged[Stdcall]<nint, ulong>)Vtbl(fence)[8])(fence);
 

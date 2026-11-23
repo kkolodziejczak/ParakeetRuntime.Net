@@ -1,9 +1,3 @@
-// FastConformer dw_striding subsampling shaders (SM 5.1):
-//   1. SubConv0ReluMain: 3x3 stride-2 conv (1 -> C) + bias + ReLU
-//   2. SubDwConvMain:    3x3 stride-2 depthwise conv (C -> C) + bias
-//   3. F32GemmReluMain:  tiled float32 GEMM (1x1 pointwise conv) + bias + ReLU
-//   4. SubTransposeMain: [T, W, C] -> [T, C, W]
-
 cbuffer Params : register(b0)
 {
     uint P0;
@@ -22,13 +16,12 @@ ByteAddressBuffer In2 : register(t2);
 
 RWByteAddressBuffer Out0 : register(u0);
 
-// 1. Conv2D 3x3 stride 2 (1 -> C) + bias + ReLU.
-// In0 = feats[H, W], In1 = weight[C, 9], In2 = bias[C], Out0 = out[H1, W1, C]
-// P0 = H, P1 = W, P2 = H1, P3 = W1, P4 = C
+static const uint MaxGroupsPerDispatchDimension = 65535u;
+
 [numthreads(256, 1, 1)]
 void SubConv0ReluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint idx = (gid.y * 65535u + gid.x) * 256u + gtid.x;
+    const uint idx = (gid.y * MaxGroupsPerDispatchDimension + gid.x) * 256u + gtid.x;
     const uint H = P0, W = P1, H1 = P2, W1 = P3, C = P4;
     const uint total = H1 * W1 * C;
     if (idx >= total) return;
@@ -58,13 +51,10 @@ void SubConv0ReluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     Out0.Store(idx << 2, asuint(max(0.0f, s)));
 }
 
-// 2. Depthwise Conv2D 3x3 stride 2 (C -> C) + bias.
-// In0 = x[H0, W0, C], In1 = dww[C, 9], In2 = dwb[C], Out0 = y[H2, W2, C]
-// P0 = H0, P1 = W0, P2 = H2, P3 = W2, P4 = C
 [numthreads(256, 1, 1)]
 void SubDwConvMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint idx = (gid.y * 65535u + gid.x) * 256u + gtid.x;
+    const uint idx = (gid.y * MaxGroupsPerDispatchDimension + gid.x) * 256u + gtid.x;
     const uint H0 = P0, W0 = P1, H2 = P2, W2 = P3, C = P4;
     const uint total = H2 * W2 * C;
     if (idx >= total) return;
@@ -94,9 +84,6 @@ void SubDwConvMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     Out0.Store(idx << 2, asuint(s));
 }
 
-// 3. Tiled FP32 GEMM + bias + ReLU: Out0[M, N] = max(0, In0[M, K] * In1[N, K]^T + In2[N])
-// K must be a multiple of 32 (subsampling C = 256).
-// P0 = M, P1 = N, P2 = K
 groupshared float sFX[32][33];
 groupshared float sFW[32][65];
 
@@ -198,12 +185,10 @@ void F32GemmReluMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 }
 
-// 4. Transpose [T, W, C] -> [T, C, W].
-// P0 = T, P1 = W, P2 = C
 [numthreads(256, 1, 1)]
 void SubTransposeMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
-    const uint idx = (gid.y * 65535u + gid.x) * 256u + gtid.x;
+    const uint idx = (gid.y * MaxGroupsPerDispatchDimension + gid.x) * 256u + gtid.x;
     const uint T = P0, W = P1, C = P2;
     const uint total = T * C * W;
     if (idx >= total) return;

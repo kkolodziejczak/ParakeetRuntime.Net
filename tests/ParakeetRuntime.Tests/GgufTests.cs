@@ -107,9 +107,8 @@ public sealed class GgufTests : IDisposable
         Assert.Throws<InvalidDataException>(() => new Gguf(path));
     }
 
-    // 2^62 values fit in a long, but their 2^64 bytes would wrap to 0 and pass as "fits".
     [Fact]
-    public void A_tensor_whose_byte_size_overflows_is_rejected()
+    public void A_tensor_whose_value_count_fits_a_long_but_whose_byte_size_would_wrap_to_zero_is_rejected()
     {
         File.WriteAllBytes(path, new GgufBuilder().F32("t", [1f], dims: [1L << 30, 1L << 30, 4]).Build());
 
@@ -143,8 +142,6 @@ public sealed class GgufTests : IDisposable
         Assert.Contains("asr.encoder.n_layers", error.Message);
     }
 
-    // Writes GGUF v3 the way llama.cpp's gguf writer lays it out: header, key-values, tensor
-    // infos, then tensor data aligned to 32 bytes.
     private sealed class GgufBuilder
     {
         private readonly List<Action<BinaryWriter>> keyValues = [];

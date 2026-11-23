@@ -5,7 +5,6 @@ using static ParakeetRuntime.D3D12Native;
 
 namespace ParakeetRuntime;
 
-// Lightweight D3D12 compute buffer handle (DEFAULT, UPLOAD, or READBACK heap).
 internal sealed unsafe class GpuBuffer : IDisposable
 {
     public nint Resource { get; private set; }
@@ -65,18 +64,16 @@ internal readonly record struct GpuAdapterInfo(
     bool IsSoftware,
     bool MeetsMinimumMemory);
 
-// Self-contained D3D12 compute device using inbox Windows DLLs (d3d12, dxgi, d3dcompiler_47).
-// Selects a hardware GPU (preferring discrete high-performance adapters), rejects software/WARP
-// adapters and GPUs below the memory budget, and provides one universal compute root signature:
-//   param 0: b0 (16 32-bit root constants)
-//   param 1..6: t0..t5 (Root SRVs)
-//   param 7..8: u0..u1 (Root UAVs)
 internal sealed unsafe class D3D12Device : IDisposable
 {
     public const long DefaultMinimumMemoryBytes = 900L * 1024 * 1024;
     public const int RootConstantsIndex = 0;
-    public const int RootSrvBase = 1; // t0..t5 -> params 1..6
-    public const int RootUavBase = 7; // u0..u1 -> params 7..8
+    public const int RootSrvBase = 1;
+    public const int RootUavBase = 7;
+    private const int RootConstantCount = 16;
+    private const int RootSrvCount = 6;
+    private const int RootUavCount = 2;
+    private const int RootParameterCount = 9;
 
     private nint adapter;
     private nint adapter3;
@@ -264,7 +261,6 @@ internal sealed unsafe class D3D12Device : IDisposable
 
         long dedicated = (long)desc.DedicatedVideoMemory;
         long shared = (long)desc.SharedSystemMemory;
-        // Integrated GPUs have small DedicatedVideoMemory and use SharedSystemMemory.
         long availableEstimate = Math.Max(dedicated, shared);
 
         nint adapter3 = 0;
@@ -328,7 +324,6 @@ internal sealed unsafe class D3D12Device : IDisposable
             var result = new D3D12Device(
                 adapterName, dedicated, shared,
                 candidate, adapter3, dev, q, alloc, list, f, ev, rs, tsHeap, tsFreq);
-            // Ownership transferred.
             adapter3 = dev = q = alloc = list = f = rs = tsHeap = ev = 0;
             return result;
         }
@@ -349,20 +344,18 @@ internal sealed unsafe class D3D12Device : IDisposable
 
     private static nint CreateUniversalRootSignature(nint dev)
     {
-        var parameters = stackalloc D3D12_ROOT_PARAMETER[9];
-        // Param 0: 16 32-bit root constants at b0
-        parameters[0] = new D3D12_ROOT_PARAMETER
+        var parameters = stackalloc D3D12_ROOT_PARAMETER[RootParameterCount];
+        parameters[RootConstantsIndex] = new D3D12_ROOT_PARAMETER
         {
             ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             ShaderRegister = 0,
             RegisterSpace = 0,
-            Num32BitValues = 16,
+            Num32BitValues = RootConstantCount,
             ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
         };
-        // Params 1..6: Root SRVs at t0..t5
-        for (uint i = 0; i < 6; i++)
+        for (uint i = 0; i < RootSrvCount; i++)
         {
-            parameters[1 + i] = new D3D12_ROOT_PARAMETER
+            parameters[RootSrvBase + i] = new D3D12_ROOT_PARAMETER
             {
                 ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV,
                 ShaderRegister = i,
@@ -370,10 +363,9 @@ internal sealed unsafe class D3D12Device : IDisposable
                 ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
             };
         }
-        // Params 7..8: Root UAVs at u0..u1
-        for (uint i = 0; i < 2; i++)
+        for (uint i = 0; i < RootUavCount; i++)
         {
-            parameters[7 + i] = new D3D12_ROOT_PARAMETER
+            parameters[RootUavBase + i] = new D3D12_ROOT_PARAMETER
             {
                 ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV,
                 ShaderRegister = i,
@@ -384,7 +376,7 @@ internal sealed unsafe class D3D12Device : IDisposable
 
         var desc = new D3D12_ROOT_SIGNATURE_DESC
         {
-            NumParameters = 9,
+            NumParameters = RootParameterCount,
             pParameters = parameters,
             NumStaticSamplers = 0,
             pStaticSamplers = 0,
@@ -592,11 +584,15 @@ internal sealed unsafe class D3D12Device : IDisposable
                 throw new InvalidOperationException($"GPU fence wait failed ({wait}).");
             completed = GetCompletedValue(fence);
         }
-        // Device removal (TDR / page fault) makes GetCompletedValue return UINT64_MAX instead of blocking.
+        ThrowIfDeviceRemoved(completed);
+    }
+
+    private void ThrowIfDeviceRemoved(ulong completedFenceValue)
+    {
         int removed = GetDeviceRemovedReason(device);
         if (removed < 0)
             Marshal.ThrowExceptionForHR(removed);
-        if (completed == ulong.MaxValue)
+        if (completedFenceValue == ulong.MaxValue)
             throw new InvalidOperationException("GPU device was removed during execution.");
     }
 

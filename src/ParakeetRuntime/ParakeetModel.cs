@@ -1,4 +1,4 @@
-// Part of the Parakeet engine; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
+// Part of ParakeetRuntime; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -17,13 +17,11 @@ internal sealed unsafe class ParakeetModel : IDisposable
     readonly Int8Path int8Path;
     readonly int d, heads, dk, ff, kernel, subCh, layersN, predLayers;
     float[] pe = []; int peRows;
-    // Subsampling (CPU path only): convolution taps as [tap][channel], pointwise weights transposed to [in][out].
     float[] c0wByTap = [], c0b = [], c2wByTap = [], c2b = [], c3wT = [], c3b = [], c5wByTap = [], c5b = [], c6wT = [], c6b = [];
     Q8Weights? subOut;
     Layer[] layers = [];
     ParakeetGpu? gpu;
     bool cpuLoaded;
-    // Decoder + joint (CPU path only, except metadata/tokenizer)
     float[] embed = []; readonly int predH, vocab, blank; readonly int[] durations; readonly int maxSymbols;
     Q8Weights[] ih = [], hh = []; Q8Weights? jointEnc, jointPred, jointOut;
     readonly string[] pieces;
@@ -32,14 +30,13 @@ internal sealed unsafe class ParakeetModel : IDisposable
     {
         public float[] nFf1g = null!, nFf1b = null!, nConvg = null!, nConvb = null!, nAttg = null!, nAttb = null!, nFf2g = null!, nFf2b = null!, nOutg = null!, nOutb = null!;
         public Q8Weights ff1a = null!, ff1b = null!, ff2a = null!, ff2b = null!, pw1 = null!, pw2 = null!, qkv = null!, outp = null!, pos = null!;
-        public float[] positions = null!; public int positionStride; // linear_pos of the pe rows every T <= CachedFrames reads, transposed
-        public float[] dwByTap = null!, bnScale = null!, bnShift = null!, u = null!, v = null!; // dwByTap[k * d + channel]
+        public float[] projectedPositionsUpTo20s = null!; public int projectedPositionsUpTo20sStride;
+        public float[] dwByTap = null!, bnScale = null!, bnShift = null!, u = null!, v = null!;
     }
 
     public ParakeetModel(string path, bool allowGpu = true, string? adapterNameFilter = null)
         : this(path, Kernels.BestPath, allowGpu, adapterNameFilter) { }
 
-    // A specific CPU int8 path (GPU disabled), for the Spike's corpus benchmark of older CPUs.
     internal ParakeetModel(string path, Int8Path int8Path)
         : this(path, int8Path, allowGpu: false, adapterNameFilter: null) { }
 
@@ -101,12 +98,12 @@ internal sealed unsafe class ParakeetModel : IDisposable
                 outp = Packed(g, p + "self_attn.linear_out.weight"), pos = Packed(g, p + "self_attn.linear_pos.weight"),
                 u = g.Floats(p + "self_attn.pos_bias_u"), v = g.Floats(p + "self_attn.pos_bias_v"),
             };
-            l.dwByTap = Transpose(g.Floats(p + "conv.depthwise_conv.weight"), d); // [channel][k] -> [k][channel]
+            l.dwByTap = Transpose(g.Floats(p + "conv.depthwise_conv.weight"), d);
             var w = g.Floats(p + "conv.batch_norm.weight"); var b = g.Floats(p + "conv.batch_norm.bias");
             var mean = g.Floats(p + "conv.batch_norm.running_mean"); var var = g.Floats(p + "conv.batch_norm.running_var");
             l.bnScale = new float[d]; l.bnShift = new float[d];
             for (int c = 0; c < d; c++) { l.bnScale[c] = w[c] / MathF.Sqrt(var[c] + 1e-5f); l.bnShift[c] = b[c] - mean[c] * l.bnScale[c]; }
-            (l.positions, l.positionStride) = ProjectPositions(l, CachedFrames);
+            (l.projectedPositionsUpTo20s, l.projectedPositionsUpTo20sStride) = ProjectPositions(l, TwentySecondsOfEncoderFrames);
         }
         embed = g.Floats("decoder.prediction.embed.weight");
         ih = new Q8Weights[predLayers]; hh = new Q8Weights[predLayers];
@@ -118,7 +115,7 @@ internal sealed unsafe class ParakeetModel : IDisposable
         cpuLoaded = true;
     }
 
-    private void FallbackToCpu()
+    private void RetireGpuAndContinueOnCpu()
     {
         gpu?.Dispose();
         gpu = null;
@@ -129,15 +126,16 @@ internal sealed unsafe class ParakeetModel : IDisposable
         }
     }
 
-    // [rows][columns] -> [columns][rows].
     static float[] Transpose(float[] a, int rows) => Kernels.Transpose(a, rows, a.Length / rows, rows);
 
     Q8Weights Packed(Gguf g, string name) => Kernels.Pack(g.Q8(name), null, int8Path);
 
     Q8Weights WithBias(Gguf g, string name) => Kernels.Pack(g.Q8(name + ".weight"), g.Floats(name + ".bias"), int8Path);
 
-    // The longest audio the position table covers: 8x subsampling, 10 ms frames.
-    public TimeSpan MaxAudio => TimeSpan.FromSeconds((peRows + 1) / 2 * 8 / 100.0 - 1);
+    const int SubsamplingFactor = 8;
+    const double MelFramesPerSecond = 100.0;
+
+    public TimeSpan MaxAudio => TimeSpan.FromSeconds((peRows + 1) / 2 * SubsamplingFactor / MelFramesPerSecond - 1);
 
     public bool IsUsingGpu => gpu is not null;
 
@@ -145,8 +143,7 @@ internal sealed unsafe class ParakeetModel : IDisposable
 
     public long GpuMemoryUsedBytes => gpu?.GpuMemoryUsedBytes ?? 0;
 
-    // Set by the Spike's corpus benchmark to see where the time goes.
-    internal StageClock? Clock { get; set; }
+    internal StageClock? BenchmarkClock { get; set; }
 
     public void Dispose()
     {
@@ -154,7 +151,6 @@ internal sealed unsafe class ParakeetModel : IDisposable
         gpu = null;
     }
 
-    // Text with punctuation and capitals, as the model writes it. Not thread-safe: one call at a time.
     public string Transcribe(float[] audio16KhzMono) => Transcribe(audio16KhzMono, out _);
 
     public string Transcribe(float[] audio16KhzMono, out TranscribeProfile profile)
@@ -186,19 +182,18 @@ internal sealed unsafe class ParakeetModel : IDisposable
                 profile = new TranscribeProfile((tMel - t0) * toMs, 0, fEncMs, fDecMs);
                 return fallbackMelText;
             }
-            catch (Exception ex) when (ex is COMException or InvalidOperationException or OutOfMemoryException)
+            catch (Exception ex) when (IsGpuDeviceLost(ex))
             {
-                // Device lost (TDR / driver reset / VRAM OOM): retire the GPU permanently and finish on CPU.
-                FallbackToCpu();
+                RetireGpuAndContinueOnCpu();
                 t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             }
         }
-        Clock?.Start();
+        BenchmarkClock?.Start();
         var feats = mel.Compute(audio16KhzMono, out int frames);
-        Clock?.Lap("mel");
+        BenchmarkClock?.Lap("mel");
         var t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-        var x = Subsample(feats, frames, out int T);
-        Clock?.Lap("subsampling");
+        var x = SubsampleDwStriding(feats, frames, out int T);
+        BenchmarkClock?.Lap("subsampling");
         var t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         using (var scratch = new EncoderScratch())
         {
@@ -210,27 +205,25 @@ internal sealed unsafe class ParakeetModel : IDisposable
             }
         }
         var t3 = System.Diagnostics.Stopwatch.GetTimestamp();
-        var text = Detokenize(Decode(x, T));
-        Clock?.Lap("decoder");
+        var text = Detokenize(DecodeTdtGreedy(x, T));
+        BenchmarkClock?.Lap("decoder");
         var t4 = System.Diagnostics.Stopwatch.GetTimestamp();
         profile = new TranscribeProfile((t1 - t0) * toMs, (t2 - t1) * toMs, (t3 - t2) * toMs, (t4 - t3) * toMs);
         return text;
     }
 
-    // dw_striding: conv3x3/2 + ReLU, (dw3x3/2, pw1x1, ReLU) x 2, then Linear(C*F -> d). Layout
-    // [H=time][W=freq][C], channels in vectors. The 3x3 sums keep the order of the plain loops.
-    float[] Subsample(float[] feats, int frames, out int T)
+    static bool IsGpuDeviceLost(Exception ex) => ex is COMException or InvalidOperationException or OutOfMemoryException;
+
+    float[] SubsampleDwStriding(float[] feats, int frames, out int T)
     {
         int W0 = mel.Mels, C = subCh;
         int H1 = (frames - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1, H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
         var y = new float[H2 * W2 * C];
-        // Conv 0's output (65 MB for 20 s) is made only three rows at a time: the rows that one
-        // output row of the first depthwise convolution reads.
         Kernels.ForRanges(H2, (start, end) =>
         {
-            var rows = new float[3 * W1 * C];
+            var conv0RowsOneDepthwiseRowReads = new float[3 * W1 * C];
             float** input = stackalloc float*[3];
-            fixed (float* fp = feats, rp = rows, yp = y, w0 = c0wByTap, b0 = c0b, w2 = c2wByTap, b2 = c2b)
+            fixed (float* fp = feats, rp = conv0RowsOneDepthwiseRowReads, yp = y, w0 = c0wByTap, b0 = c0b, w2 = c2wByTap, b2 = c2b)
                 for (int h = start; h < end; h++)
                 {
                     for (int kh = 0; kh < 3; kh++)
@@ -256,13 +249,11 @@ internal sealed unsafe class ParakeetModel : IDisposable
         });
         var a = Kernels.GemmRelu(y2, H3 * W3, c6wT, C, C, c6b);
         T = H3;
-        // per frame: feature index c * W + w
-        var flat = new float[T * C * W3];
-        for (int t = 0; t < T; t++) for (int w = 0; w < W3; w++) for (int c = 0; c < C; c++) flat[t * C * W3 + c * W3 + w] = a[(t * W3 + w) * C + c];
-        return Kernels.Linear(flat, T, subOut!);
+        var channelMajorFrames = new float[T * C * W3];
+        for (int t = 0; t < T; t++) for (int w = 0; w < W3; w++) for (int c = 0; c < C; c++) channelMajorFrames[t * C * W3 + c * W3 + w] = a[(t * W3 + w) * C + c];
+        return Kernels.Linear(channelMajorFrames, T, subOut!);
     }
 
-    // One row of conv 0 (1 input channel, 3x3, stride 2, ReLU) for all output channels.
     void Conv0Row(float* feats, int H, int W, int r, float* taps, float* bias, float* output, int W1)
     {
         int C = subCh;
@@ -283,8 +274,7 @@ internal sealed unsafe class ParakeetModel : IDisposable
             }
     }
 
-    // One output row of a depthwise 3x3 stride-2 convolution; a null input row is padding.
-    void DepthwiseRow(float** input, int W, int Wout, float* taps, float* bias, float* output)
+    void DepthwiseRow(float** inputRowsNullForPadding, int W, int Wout, float* taps, float* bias, float* output)
     {
         int C = subCh;
         for (int w = 0; w < Wout; w++)
@@ -293,44 +283,41 @@ internal sealed unsafe class ParakeetModel : IDisposable
                 var s = Vector.Load(bias + c);
                 for (int kh = 0; kh < 3; kh++)
                 {
-                    if (input[kh] == null) continue;
+                    if (inputRowsNullForPadding[kh] == null) continue;
                     for (int kw = 0; kw < 3; kw++)
                     {
                         int iw = 2 * w - 1 + kw; if (iw < 0 || iw >= W) continue;
-                        s += Vector.Load(input[kh] + iw * C + c) * Vector.Load(taps + (kh * 3 + kw) * C + c);
+                        s += Vector.Load(inputRowsNullForPadding[kh] + iw * C + c) * Vector.Load(taps + (kh * 3 + kw) * C + c);
                     }
                 }
                 s.Store(output + w * C + c);
             }
     }
 
+    const float HalfStepFeedForward = 0.5f;
+
     float[] ConformerLayer(Layer l, float[] x, int T)
     {
-        // Feed-forward 1 (half step)
         var h = Kernels.Linear(Kernels.LayerNorm(x, T, d, l.nFf1g, l.nFf1b), T, l.ff1a, Activation.Silu);
-        Kernels.LinearAdd(h, T, l.ff1b, 0.5f, x);
-        Clock?.Lap("feed-forward");
+        Kernels.LinearAdd(h, T, l.ff1b, HalfStepFeedForward, x);
+        BenchmarkClock?.Lap("feed-forward");
 
-        // Relative-position multi-head self-attention
-        Attention(l, Kernels.LayerNorm(x, T, d, l.nAttg, l.nAttb), T, x);
-        Clock?.Lap("attention");
+        AddRelativePositionAttention(l, Kernels.LayerNorm(x, T, d, l.nAttg, l.nAttb), T, x);
+        BenchmarkClock?.Lap("attention");
 
-        // Convolution module
         var c = Kernels.Linear(Kernels.LayerNorm(x, T, d, l.nConvg, l.nConvb), T, l.pw1);
-        var dwo = DepthwiseConvolution(l, Glu(c, T), T);
+        var dwo = DepthwiseConvolutionBatchNormSilu(l, Glu(c, T), T);
         Kernels.LinearAdd(dwo, T, l.pw2, 1f, x);
-        Clock?.Lap("convolution");
+        BenchmarkClock?.Lap("convolution");
 
-        // Feed-forward 2 (half step)
         h = Kernels.Linear(Kernels.LayerNorm(x, T, d, l.nFf2g, l.nFf2b), T, l.ff2a, Activation.Silu);
-        Kernels.LinearAdd(h, T, l.ff2b, 0.5f, x);
-        Clock?.Lap("feed-forward");
+        Kernels.LinearAdd(h, T, l.ff2b, HalfStepFeedForward, x);
+        BenchmarkClock?.Lap("feed-forward");
         var o = Kernels.LayerNorm(x, T, d, l.nOutg, l.nOutb);
-        Clock?.Lap("output norm");
+        BenchmarkClock?.Lap("output norm");
         return o;
     }
 
-    // a * sigmoid(gate) for each frame's [a | gate] halves.
     float[] Glu(float[] c, int T)
     {
         var glu = EncoderScratch.Rent(T * d);
@@ -346,8 +333,7 @@ internal sealed unsafe class ParakeetModel : IDisposable
         return glu;
     }
 
-    // Per-channel convolution over time, then batch norm and SiLU; channels in vectors.
-    float[] DepthwiseConvolution(Layer l, float[] glu, int T)
+    float[] DepthwiseConvolutionBatchNormSilu(Layer l, float[] glu, int T)
     {
         var dwo = EncoderScratch.Rent(T * d); int pad = (kernel - 1) / 2;
         Kernels.For(T, t =>
@@ -365,12 +351,8 @@ internal sealed unsafe class ParakeetModel : IDisposable
         return dwo;
     }
 
-    // Utterances up to 20 s (UtteranceCutter's longest, 251 encoder frames) read the positional
-    // projections made at load: each row depends only on its pe row, so a slice of the longest
-    // is exactly what a shorter utterance would compute. 2 MB per layer.
-    const int CachedFrames = 251;
+    const int TwentySecondsOfEncoderFrames = 251;
 
-    // linear_pos of positions T-1 .. -(T-1): pe rows center-T .. center+T-2, center = peRows/2 + 1 (max_len).
     (float[] Table, int Stride) ProjectPositions(Layer l, int T)
     {
         int start = (peRows + 1) / 2 - T, P = 2 * T - 1;
@@ -379,19 +361,18 @@ internal sealed unsafe class ParakeetModel : IDisposable
         return Kernels.TransposePositions(Kernels.Linear(pos, P, l.pos), P, d);
     }
 
-    // Adds the attention output to x.
-    void Attention(Layer l, float[] x, int T, float[] residual)
+    void AddRelativePositionAttention(Layer l, float[] x, int T, float[] residual)
     {
-        var qkv = Kernels.Linear(x, T, l.qkv); // [T][3d]: q | k | v
-        // first: the column of position T-1 in the table.
-        var ((positions, stride), first) = T <= CachedFrames ? ((l.positions, l.positionStride), CachedFrames - T) : (ProjectPositions(l, T), 0);
+        var qkv = Kernels.Linear(x, T, l.qkv);
+        var ((positions, stride), columnOfPositionTMinus1) = T <= TwentySecondsOfEncoderFrames
+            ? ((l.projectedPositionsUpTo20s, l.projectedPositionsUpTo20sStride), TwentySecondsOfEncoderFrames - T)
+            : (ProjectPositions(l, T), 0);
         var ctx = EncoderScratch.Rent(T * d);
-        Kernels.RelativeAttention(qkv, T, d, heads, l.u, l.v, positions, stride, first, ctx);
+        Kernels.RelativeAttention(qkv, T, d, heads, l.u, l.v, positions, stride, columnOfPositionTMinus1, ctx);
         Kernels.LinearAdd(ctx, T, l.outp, 1f, residual);
     }
 
-    // TDT greedy decoding (NeMo GreedyTDTInfer; NeMo-Speech.cpp rnnt_greedy_decoder.cpp:388-467).
-    List<int> Decode(float[] enc, int T)
+    List<int> DecodeTdtGreedy(float[] enc, int T)
     {
         var encProj = Kernels.Linear(enc, T, jointEnc!);
         int J = jointEnc!.Rows;
@@ -464,7 +445,6 @@ internal sealed unsafe class ParakeetModel : IDisposable
         return SanitizePunctuationSpacing(Encoding.UTF8.GetString(bytes.ToArray()).Trim());
     }
 
-    // NeMo-Speech.cpp src/asr/postproc/pipeline.cpp:81
     static string SanitizePunctuationSpacing(string s)
     {
         const string left = ".,?!;:%)]}-", right = "([{-";

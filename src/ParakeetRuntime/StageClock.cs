@@ -1,4 +1,3 @@
-// Where the time of one utterance goes, for the Spike's corpus benchmark. The app never sets one.
 using System.Diagnostics;
 
 namespace ParakeetRuntime;
@@ -10,7 +9,6 @@ internal sealed class StageClock
 
     public void Start() => last = Stopwatch.GetTimestamp();
 
-    // Charges the time since the previous lap (or Start) to this stage.
     public void Lap(string stage)
     {
         var now = Stopwatch.GetTimestamp();

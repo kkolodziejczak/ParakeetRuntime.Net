@@ -3,21 +3,13 @@ using System.Globalization;
 using System.Numerics;
 using ParakeetRuntime;
 
-// The CPU encoder's kernels alone, per Conformer layer, for comparing a change in seconds instead of a corpus run.
-//   --cpu-bench [--frames 250,1500] [--affinity C03] [--threads N] [--int8-path Portable|Avx2|AvxVnni|AvxVnniInt8]
-// Prints the best of several runs per kernel in ms per layer (for a matrix product, also the part spent quantizing
-// its input), their total, and a checksum of each kernel's output bits: two builds that print the same checksums
-// computed the same bits. Each kernel's inputs depend only on the kernel and the frame count, so the checksums
-// don't change with --frames' order. The total leaves out the layer's smaller kernels (norms, convolution).
 internal static class CpuBench
 {
     private const int D = 1024, Heads = 8, Runs = 7;
+    private const int MostFramesUsingTheLoadTimePositionTable = 251;
+    private const ulong FnvOffsetBasis = 14695981039346656037UL, FnvPrime = 1099511628211UL;
 
-    // One Conformer layer's matrix products as the encoder runs them (ParakeetModel's layer): output columns, input
-    // width, rows as a multiple of the frame count, times per layer, and the output step: SiLU, or added into
-    // the residual (the feed-forwards' at half weight). No bias, like the encoder's layers. Positions run only
-    // above 20 s (251 frames); shorter utterances read the table made at load.
-    private static readonly (string Name, int N, int K, int RowsPerFrame, int Count, Output Output)[] LayerShapes =
+    private static readonly (string Name, int N, int K, int RowsPerFrame, int TimesPerLayer, Output Output)[] LayerShapes =
     [
         ("ff in", 4096, 1024, 1, 2, Output.Silu),
         ("ff out", 1024, 4096, 1, 2, Output.AddHalfToResidual),
@@ -36,7 +28,7 @@ internal static class CpuBench
         if (Value("--affinity") is { } mask)
             Process.GetCurrentProcess().ProcessorAffinity = (nint)long.Parse(mask.Replace("0x", "", StringComparison.OrdinalIgnoreCase), NumberStyles.HexNumber);
         if (Value("--threads") is { } threads)
-            Kernels.UseThreads(int.Parse(threads, CultureInfo.InvariantCulture));
+            Kernels.OverrideThreadBudgetForBenchmark(int.Parse(threads, CultureInfo.InvariantCulture));
         var path = Kernels.BestPath;
         if (Value("--int8-path") is { } name && (!Enum.TryParse(name, out path) || !Kernels.Supports(path)))
         {
@@ -54,12 +46,11 @@ internal static class CpuBench
             for (var s = 0; s < LayerShapes.Length; s++)
             {
                 var (shape, w) = (LayerShapes[s], weights[s]);
-                if (shape.Name == "positions" && frames <= 251)
+                if (shape.Name == "positions" && frames <= MostFramesUsingTheLoadTimePositionTable)
                     continue;
                 int rows = frames * shape.RowsPerFrame - (shape.RowsPerFrame - 1);
                 var inputs = new Random(frames * 100 + s);
                 var x = RandomFloats(inputs, rows * shape.K, 1f);
-                // A residual collects every run's sum, as many runs in every build.
                 bool residual = shape.Output is Output.AddHalfToResidual or Output.AddToResidual;
                 var y = residual ? RandomFloats(inputs, rows * shape.N, 1f) : [];
                 var ms = Best(() =>
@@ -70,8 +61,8 @@ internal static class CpuBench
                         y = Kernels.Linear(x, rows, w, shape.Output == Output.Silu ? Activation.Silu : Activation.None);
                 });
                 var quantizeMs = Best(() => Kernels.Quantize(x, rows, shape.K));
-                total += ms * shape.Count;
-                Console.WriteLine($"  T={frames,5}  {shape.Name,-10} {rows,5} x {shape.K,4} x {shape.N,4}  {ms * shape.Count,8:0.00} ms (quantizing {quantizeMs * shape.Count:0.00})  {Checksum(y)}");
+                total += ms * shape.TimesPerLayer;
+                Console.WriteLine($"  T={frames,5}  {shape.Name,-10} {rows,5} x {shape.K,4} x {shape.N,4}  {ms * shape.TimesPerLayer,8:0.00} ms (quantizing {quantizeMs * shape.TimesPerLayer:0.00})  {Checksum(y)}");
             }
             {
                 var inputs = new Random(frames * 100 + LayerShapes.Length);
@@ -88,7 +79,6 @@ internal static class CpuBench
         return 0;
     }
 
-    // Buffers come from a scratch, reused run after run as the encoder reuses them layer after layer.
     private static double Best(Action run)
     {
         using var scratch = new EncoderScratch();
@@ -122,12 +112,11 @@ internal static class CpuBench
         return values;
     }
 
-    // FNV-1a over the bits: the same in every process, unlike HashCode.
     private static string Checksum(float[] values)
     {
-        var hash = 14695981039346656037UL;
+        var hash = FnvOffsetBasis;
         foreach (var value in values)
-            hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(value)) * 1099511628211UL;
+            hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(value)) * FnvPrime;
         return $"bits {hash:X16}";
     }
 }
