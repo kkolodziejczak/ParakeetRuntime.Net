@@ -38,6 +38,8 @@ public sealed class SpeechEngineThreadingTests
         private readonly ManualResetEventSlim released = new();
         public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Disposed { get; private set; }
+        public string BackendName => "test";
+        public bool IsUsingGpu => false;
 
         public void Release() => released.Set();
 

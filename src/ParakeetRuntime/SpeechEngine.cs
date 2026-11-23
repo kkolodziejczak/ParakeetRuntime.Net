@@ -9,26 +9,41 @@ public sealed class SpeechEngine : IDisposable
     private IUtteranceRecognizer? modelUntilDisposed;
     private readonly SemaphoreSlim oneAtATime = new(1, 1);
 
-    internal SpeechEngine(IUtteranceRecognizer model) => this.modelUntilDisposed = model;
+    internal SpeechEngine(IUtteranceRecognizer model)
+    {
+        modelUntilDisposed = model;
+        Backend = model.BackendName;
+        IsUsingGpu = model.IsUsingGpu;
+    }
 
     /// <summary>
     /// Loads an installed model into memory. This reads the whole model file and takes a few seconds.
     /// </summary>
     /// <param name="speechModel">The installed model to load.</param>
+    /// <param name="options">Where the model runs; on a GPU when one is usable, when omitted.</param>
     /// <param name="cancellationToken">Cancels the load before it starts.</param>
     /// <returns>An engine ready to transcribe.</returns>
     /// <exception cref="FileNotFoundException">The model is not installed; see <see cref="SpeechModel.IsInstalled"/>.</exception>
     /// <exception cref="InvalidDataException">The model file is damaged or is not a Parakeet GGUF file.</exception>
-    public static async Task<SpeechEngine> LoadAsync(SpeechModel speechModel, CancellationToken cancellationToken = default)
+    public static async Task<SpeechEngine> LoadAsync(SpeechModel speechModel, SpeechEngineOptions? options = null, CancellationToken cancellationToken = default)
     {
         if (!speechModel.IsInstalled)
             throw new FileNotFoundException($"The speech model is not installed ({speechModel.Path}).", speechModel.Path);
-        var model = await Task.Run(() => new ParakeetModel(speechModel.Path), cancellationToken).ConfigureAwait(false);
+        var chosen = options ?? new SpeechEngineOptions();
+        var model = await Task.Run(() => new ParakeetModel(speechModel.Path, chosen.UseGpu, chosen.GpuNameContains), cancellationToken).ConfigureAwait(false);
         return new SpeechEngine(model);
     }
 
-    internal static async Task<SpeechEngine> LoadUncheckedAsync(string modelPath) =>
-        new(await Task.Run(() => new ParakeetModel(modelPath)).ConfigureAwait(false));
+    /// <summary>
+    /// Where the model runs, for example "GPU: NVIDIA GeForce RTX 5070 Ti (D3D12)" or "CPU (AvxVnniInt8)".
+    /// </summary>
+    public string Backend { get; }
+
+    /// <summary>
+    /// Whether the model runs on a GPU. False when the options turned the GPU off, and also when no
+    /// usable GPU, or none whose name matched, was found.
+    /// </summary>
+    public bool IsUsingGpu { get; }
 
     /// <summary>
     /// Transcribes one utterance. Calls made while another transcription runs wait for it to finish.
