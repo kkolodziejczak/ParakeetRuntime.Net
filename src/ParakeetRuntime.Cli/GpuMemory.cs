@@ -30,10 +30,12 @@ internal sealed class GpuMemory(int processId)
                 dedicated += d.RawValue;
                 shared += s.RawValue;
             }
-            catch (InvalidOperationException)
+            catch (Exception exception) when (CounterInstanceEndedBetweenListingAndReading(exception))
             {
             }
         }
         return (dedicated, shared);
     }
+
+    private static bool CounterInstanceEndedBetweenListingAndReading(Exception exception) => exception is InvalidOperationException;
 }

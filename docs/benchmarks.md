@@ -777,3 +777,43 @@ LocalBuddy RTF, and in brackets NeMo-Speech.cpp RTF ÷ LocalBuddy RTF on the sam
 
 The 93 tests also pass on both builds, and the two Q8 GEMM shaders compile to identical FXC
 bytecode. No speed was measured for this record: these runs check transcripts only.
+
+## 2026-11-23 · Corrections: machine attributions and the full GEMM tile table
+
+- **Machine:** not applicable. This record corrects earlier records, which stay as they were written.
+- **Commit:** the sources named below
+- **Setup:** a check of every seeded record against its commit message and pull request
+
+**Machine attributions.** The CPU named in these records is inferred, not stated by their source.
+Read their **Machine** line as "inferred: Intel Core Ultra 7 270K Plus".
+
+| Record | Why it's inferred |
+| --- | --- |
+| 2026-11-22 · First full matrix against NeMo-Speech.cpp | PR #3 names the GPUs and the pin, not the CPU. |
+| 2026-11-22 · GPU decoder batches bounded by a time budget | `3022ad7` names no CPU. |
+| 2026-11-22 · GPU Q8 GEMM: 64x64 tile above 96 rows | `b891d67` and PR #3 name no CPU. |
+| 2026-11-23 · CPU: 3x faster activation quantizing, faster attention | `95c8512` says only "4 P-cores, affinity C03". |
+| 2026-11-23 · Quantize review fixes | `304b764` names no CPU. |
+| 2026-11-23 · CPU bench with tiering off | `ca13477` names no CPU. |
+| 2026-11-23 · GPU: 64x64 GEMM compiled in the background; load time | `953f41c` names no CPU. |
+| 2026-11-23 · Final matrix against NeMo-Speech.cpp | PR #3 names the GPUs and the pin, not the CPU. |
+| 2026-11-23 · Figures that were kept in the engine's code comments: the rows for `95c8512`, `8122b32` and `c2c2769` | Their sources name no CPU. |
+
+The inference rests on `Run-Matrix.ps1` at LocalBuddy `19d2905`, whose `C03` pin is "4 P-cores
+of the Core Ultra 7 270K Plus (CPUs 0, 1, 10, 11)", and on PR #1, which names that machine. The
+2026-11-22 record "CPU: one thread per fast core, up to 8" says "same hybrid CPU as the
+`bf1b4a5` record". Neither source names the CPU there either. `8122b32` mentions an i7-11850H only
+as an example of an 8-core laptop, not as the benchmark machine.
+
+**Full GEMM tile table** from the `Q8Gemm.hlsl` comment at LocalBuddy `19d2905` (written in
+`b891d67`, measured 2026-11-22). The 2026-11-22 GEMM record gives only part of it. The comment
+names no CPU or driver. Values are speed-ups against the single 32 x 32 kernel used before, from
+`--gemm-bench` with the encoder's per-layer shapes. "Frames" is the row count of most of the
+layer's products.
+
+| GPU | Kernel | 25 | 64 | 96 | 128 | 250 | 1500 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| RTX 5070 Ti | small (32 x 32) | 1.09x | 1.03x | 1.01x | 1.01x | 1.02x | 1.00x |
+| RTX 5070 Ti | large (64 x 64) | 0.82x | 0.86x | 0.95x | 1.03x | 1.38x | 1.54x |
+| Intel Graphics | small (32 x 32) | 1.05x | 1.10x | 1.11x | 1.09x | 1.11x | 1.12x |
+| Intel Graphics | large (64 x 64) | 0.88x | 1.54x | 1.29x | 1.65x | 1.66x | 1.61x |

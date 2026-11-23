@@ -50,6 +50,7 @@ foreach ($language in $Languages) {
         foreach ($run in $runs.Keys) {
             $name = "$language-$length-$run"
             $compareWith = if ($Baseline) { Join-Path $Baseline "$name.tsv" } elseif ($run -ne "nemo-cpu") { $nemoBase }
+            if ($Baseline -and -not (Test-Path $compareWith)) { throw "The baseline has no $name.tsv; run it with the same options as this run." }
             Invoke-Bench $name ($common + $runs[$run]) $compareWith
         }
     }

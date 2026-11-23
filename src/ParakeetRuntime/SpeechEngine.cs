@@ -4,7 +4,7 @@ namespace ParakeetRuntime;
 /// Runs NVIDIA Parakeet TDT 0.6B v3 inside the calling process. It transcribes one utterance at a
 /// time, and each transcription runs on the thread pool, so callers never block.
 /// </summary>
-public sealed class SpeechEngine
+public sealed class SpeechEngine : IDisposable
 {
     private ParakeetModel? modelUntilDisposed;
     private readonly SemaphoreSlim oneAtATime = new(1, 1);
@@ -57,7 +57,11 @@ public sealed class SpeechEngine
     private static Task<string> RunToCompletionWhileHoldingTheLock(ParakeetModel model, float[] samples16KhzMono) =>
         Task.Run(() => model.Transcribe(samples16KhzMono));
 
-    internal void Dispose()
+    /// <summary>
+    /// Releases the model and its GPU resources, and returns the model's managed memory to the system
+    /// right away. Waits for a running transcription to finish first. Calling it again does nothing.
+    /// </summary>
+    public void Dispose()
     {
         oneAtATime.Wait();
         try

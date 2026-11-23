@@ -122,8 +122,8 @@ into submits sized to `SubmitBudgetMsUnderGpuTimeout`:
 - When the encoder fits in one submit, the first decoder batch shares that submit and gets the
   budget the encoder leaves. GPU timestamps then split the time between encoder and decoder.
   When the encoder is split, the decoder gets its own submits and wall-clock time splits them.
-- Decoder: `DecodeBatchSteps` gives enough steps for the frames left (a TDT step advances 0 to 4
-  frames), but only as many as fit the budget at the measured time per step. Until a step has
+- Decoder: `DecodeBatchSteps` asks for 3/5 of the frames left plus 16 steps (a heuristic, not a
+  bound: a TDT step advances 0 to 4 frames, and the next batch picks up what is left), but only as many as fit the budget at the measured time per step. Until a step has
   been timed, a batch is `UncalibratedDecodeBatchSteps`. The decoder step time comes from the
   wall time of decoder-only submits, recording and fence wait included, which is on the safe side.
 - Decoding continues in batches until the frame pointer reaches `T`, and fails if it does not
@@ -131,13 +131,14 @@ into submits sized to `SubmitBudgetMsUnderGpuTimeout`:
 
 ## GPU decoder step
 
-Each decoder step is four dispatches, all gated on the GPU by the current frame `t < T`, so a
+Each decoder step is `predLayers + 3` dispatches (five for this model, with two LSTM layers), all gated on the GPU by the current frame `t < T`, so a
 batch can run more steps than needed without changing the result:
 
 1. `RecordLstmLayers`: one fused LSTM dispatch per layer. Layer 0 reads the embedding of the last
    token; layer `i > 0` reads the slot of `decH[i - 1]` that the layer below just wrote.
 2. `RecordJointPred`: `Q8GemvCondMain` in mode `GemvModeJointPredFromPingPongSlot`. It runs only
-   when a new prediction is needed and reads the last LSTM layer's current slot.
+   when a new prediction is needed and reads the slot the last LSTM layer just wrote
+   (`1 - lstmSlot`; `RecordArgMaxAndStep` flips the slot afterwards).
 3. `RecordJointOutWithFusedRelu`: `Q8GemvCondMain` in mode `GemvModeJointOutWithFusedRelu`. It
    computes `max(0, encProj[t] + predProj)` on the fly and multiplies by the joint output weights.
 4. `RecordArgMaxAndStep`: argmax over tokens and durations, the frame and symbol-count update, the
@@ -161,7 +162,7 @@ fused epilogue (`GpuEpilogue`: store, SiLU, add to `Y`, add half to `Y`).
     `float4[32][16]` arrays, 16 KB.
   - `Q8GemmSmallMain`: a 32 x 32 output tile, 8 x 8 = 64 threads, 4 x 4 outputs each, 8 KB of
     shared memory. Up to `RowsUpToWhichLargeTileUnderfillsTheGpu` rows, it starts twice as many
-    thread groups as the 64 x 64 tile would, which keeps a large GPU busy on short utterances.
+    thread groups per axis (four times as many in all) as the 64 x 64 tile would, which keeps a large GPU busy on short utterances.
 - Each thread stages 4 rows x 4 k values of `X`, and the same of `W`, transposed into one
   `float4` per k: `rowQuad = tid >> 3` is the group of four rows, `kCol = 4 * (tid & 7)` the first
   k. The shared arrays are indexed `[k][rowQuad]`.

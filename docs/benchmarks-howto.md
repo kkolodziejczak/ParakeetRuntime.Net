@@ -25,7 +25,7 @@ whether it has enough memory for the engine.
 | --- | --- |
 | `--corpus` | A list file with one WAV path per line, or a folder of WAVs (taken in name order). Every clip must be 16 kHz mono. |
 | `--device` | Without `--nemo`: `cpu` (the default), `gpu` (the adapter the engine picks on its own), or `gpu:<part of the adapter name from --list-gpus>`. The run stops if that GPU is not used. With `--nemo`, the value is passed on to NeMo-Speech.cpp (`cpu` or `vulkan:N`). |
-| `--nemo` | Runs NeMo-Speech.cpp's `serve` command instead of ParakeetRuntime, on the same model and cores, over its HTTP API. Its load time counts until `/ready` answers, which includes the server's own warmup. |
+| `--nemo` | Runs NeMo-Speech.cpp's `serve` command instead of ParakeetRuntime, on the same model and the same `--affinity` mask but with `--threads 1`, over its HTTP API. Its load time counts until `/ready` answers, which includes the server's own warmup. |
 | `--affinity` | A hex mask of the CPUs to run on, for example `C03` for CPUs 0, 1, 10 and 11. Pick cores of one kind, so runs are comparable. |
 | `--passes` | How many times every clip is transcribed. Each pass prints its time; the best pass is the one reported in `--results`. |
 | `--out` | Writes the transcripts as a TSV of file name and text. |
@@ -75,7 +75,7 @@ parakeet-runtime --session-memory <clip.wav> [--device cpu|gpu] [--sessions 3] [
 
 Each session loads the engine, transcribes the clip and disposes the engine. The engine object
 stays referenced afterwards, as an application that keeps a finished session around would. Memory
-is then read every second with nothing running, and nothing in the check forces a garbage
+is then read 0, 1 and 5 seconds after the session and at the end of `--idle-seconds`, with nothing running, and nothing in the check forces a garbage
 collection. Each line shows private bytes, working set, the managed heap, GPU dedicated and shared
 memory, and the number of full collections so far.
 
@@ -107,7 +107,7 @@ powershell -File <changed checkout>\scripts\Run-Matrix.ps1 -Languages pl_pl -Len
 | Parameter | Default | Meaning |
 | --- | --- | --- |
 | `-Nemo` | none | Path to `nemo-speech.exe`. Without it only ParakeetRuntime runs. |
-| `-Corpus` | `%USERPROFILE%\.councils\local-parakeet-engine\fable\corpus` | The corpus root: `<language>\wav16` with `<language>\dev.tsv`, and `<language>\<length>\list.txt` with its own `dev.tsv`. |
+| `-Corpus` | `%USERPROFILE%\.councils\local-parakeet-engine\fable\corpus` | The corpus root: `<language>\wav16\list.txt` with `<language>\dev.tsv`, and `<language>\<length>\list.txt` with its own `dev.tsv`. |
 | `-Out` | `%TEMP%\parakeet-matrix` | Where results, transcripts and logs go. |
 | `-Baseline` | none | An earlier `-Out` folder; each run is compared with the same run's transcript there instead of with NeMo-Speech.cpp on the CPU. |
 | `-Languages` | `pl_pl`, `en_us` | Corpus languages. |

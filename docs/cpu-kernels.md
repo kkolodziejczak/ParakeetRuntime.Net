@@ -34,15 +34,16 @@ still in a register.
 - The AVX2 paths interleave 8 output rows, 4 bytes at a time. One 256-bit multiply-add then gives
   8 dot products of 4 values each, so a block of 32 needs 8 of them and one float scaling for 8
   outputs.
-- Each group of 8 rows keeps its place in the arrays, so packing needs no second copy. A last
-  partial group is padded with zero scales (and a zero bias).
+- When the row count is a multiple of 8, each group of 8 rows keeps its place in the arrays, so
+  packing needs no second copy. Otherwise packing writes into new arrays, where the last partial
+  group is padded with zero scales (and a zero bias).
 - The portable path keeps plain rows.
 
 ### Tiles
 
 - `PackedQ8Gemm` gives each thread a run of 8-row weight groups, which stay in L1 while all rows
   of X pass.
-- Where two groups remain, `Tile4x16` takes four rows of X against both: 16 outputs per row. 5
+- Where two groups remain, `Tile4x16` takes four rows of X against both: 16 outputs per row. 6
   loads feed 8 multiply-adds (the 4 x 8 tile, `Tile4`, needs 5 loads for 4). The float sums spill
   once per block. Leftover rows go through `Tile1`.
 - `IInt8Dot` is one step of the packed dot product: 8 lanes, each adding 4 products of x and w.
@@ -214,8 +215,8 @@ instead of a corpus run.
 
 `Relative_attention_keeps_its_exact_float_sums` pins the exact bits of the attention output, so
 that a faster loop order cannot slip in a reordered float sum: transcripts must stay identical. It
-uses `dk = 128` as in the model; `T = 70` and `300` span several blocks of query rows with a
-partial row tile at the end.
+uses `dk = 128` as in the model; `T = 70` and `300` span several blocks of query rows, and
+`T = 70` ends with a partial row tile.
 
 The bits depend on 256-bit FMA vectors and on .NET's `Vector.Exp`, so the test runs only where
 `Vector<float>` is 256 bits wide and FMA exists (`FmaFact`). Update the pinned values only together

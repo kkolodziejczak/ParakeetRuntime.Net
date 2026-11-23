@@ -9,8 +9,10 @@ entry point must never be renamed.
 
 ## Shared conventions
 
-- Every file declares the same constant buffer: `cbuffer Params : register(b0)` with eight `uint`
-  values `P0` to `P7`, set as root constants. Each entry point gives them names as locals.
+- Every file declares one constant buffer, `cbuffer Params : register(b0)`, of eight `uint` values
+  set as root constants. The encoder, decoder, subsampling and mel files call them `P0` to `P7`
+  and name them as locals in each entry point; `Q8Gemm.hlsl` names the fields directly (`M`, `N`,
+  `K`, `hasBias`, `epilogue`, `xByteOffset`, `yByteOffset`, `pad0`).
 - Inputs are `ByteAddressBuffer In0`, `In1`, … at `t0`, `t1`, …; outputs are
   `RWByteAddressBuffer Out0`, `Out1` at `u0`, `u1`. All addresses are in bytes, so element `i`
   of a float buffer is at `i << 2`.
@@ -63,8 +65,9 @@ keeps every thread through the reduction barriers, and only acts when `t < T` (`
   the previous layer's new hidden state), compute `W_ih x + W_hh h + b` for the four gates, and
   apply the cell update. Gated on `t < T` and `needPredict`.
   - `P0 = H` (at most 1024, a multiple of 32), `P1 = T`, `P2` = 1 when the input is the
-    embedding table (`LstmInputIsEmbedding`), `P3`/`P4` = byte offsets of the `hh` weights and
-    scales after the `ih` ones in the same buffers.
+    embedding table (`LstmInputIsEmbedding`), `P3`/`P4` = how many bytes after the `ih` weights
+    and scales the `hh` ones start, relative to the `ih` views bound at `In1`/`In2`, not absolute
+    offsets.
   - `In0` = embedding `[vocab, H]` or the previous layer's `decH` (`2 * H` floats; the new
     hidden state is in that layer's destination slot), `In1` = Q8 weights, `In2` = scales,
     `In3` = pre-summed `ihBias + hhBias` `[4 * H]`, `StateIn` = `decState`.
