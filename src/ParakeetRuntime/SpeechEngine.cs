@@ -36,14 +36,15 @@ public sealed class SpeechEngine : IDisposable
 
     /// <summary>
     /// Where the model runs, for example "GPU: NVIDIA GeForce RTX 5070 Ti (D3D12)" or "CPU (AvxVnniInt8)".
+    /// It changes to the CPU after a transcription in which the GPU was lost, for example to a driver reset.
     /// </summary>
-    public string Backend { get; }
+    public string Backend { get; private set; }
 
     /// <summary>
     /// Whether the model runs on a GPU. False when the options turned the GPU off, and also when no
     /// usable GPU, or none whose name matched, was found.
     /// </summary>
-    public bool IsUsingGpu { get; }
+    public bool IsUsingGpu { get; private set; }
 
     /// <summary>
     /// Transcribes one utterance. Calls made while another transcription runs wait for it to finish.
@@ -61,7 +62,10 @@ public sealed class SpeechEngine : IDisposable
         {
             var running = modelUntilDisposed;
             ObjectDisposedException.ThrowIf(running is null, this);
-            return await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono).ConfigureAwait(false);
+            var text = await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono).ConfigureAwait(false);
+            Backend = running.BackendName;
+            IsUsingGpu = running.IsUsingGpu;
+            return text;
         }
         finally
         {

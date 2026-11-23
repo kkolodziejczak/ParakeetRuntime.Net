@@ -19,6 +19,19 @@ public sealed class SpeechEngineThreadingTests
         Assert.True(model.Disposed);
     }
 
+    [Fact]
+    public async Task After_the_GPU_is_lost_mid_transcription_the_engine_reports_the_CPU()
+    {
+        var model = new ModelThatLosesItsGpu();
+        using var engine = new SpeechEngine(model);
+        Assert.True(engine.IsUsingGpu);
+
+        await engine.TranscribeAsync([0f]);
+
+        Assert.False(engine.IsUsingGpu);
+        Assert.Equal("CPU", engine.Backend);
+    }
+
     private static void StartTranscribingFrom(SynchronizationContext uiThread, SpeechEngine engine)
     {
         var previous = SynchronizationContext.Current;
@@ -51,6 +64,20 @@ public sealed class SpeechEngineThreadingTests
         }
 
         public void Dispose() => Disposed = true;
+    }
+
+    private sealed class ModelThatLosesItsGpu : IUtteranceRecognizer
+    {
+        public string BackendName => IsUsingGpu ? "GPU: test" : "CPU";
+        public bool IsUsingGpu { get; private set; } = true;
+
+        public string Transcribe(float[] samples16KhzMono)
+        {
+            IsUsingGpu = false;
+            return "";
+        }
+
+        public void Dispose() { }
     }
 
     private sealed class UiThreadThatNeverPumps : SynchronizationContext

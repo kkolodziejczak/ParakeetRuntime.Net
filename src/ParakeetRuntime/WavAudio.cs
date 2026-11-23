@@ -75,6 +75,8 @@ internal static class WavAudio
         var maxFrames = (long)Math.Ceiling(longest.TotalSeconds * format.SampleRate);
         var lengthIsKnown = declaredBytes != UnknownLengthMarker;
         var declaredFrames = declaredBytes / format.BytesPerFrame;
+        if (lengthIsKnown && declaredBytes % format.BytesPerFrame != 0)
+            throw new InvalidDataException("The WAV audio ends inside a sample frame.");
         if (lengthIsKnown && declaredFrames > maxFrames)
             throw TooLong(longest);
         var resampler = new ResamplerTo16Khz(format.SampleRate, lengthIsKnown ? declaredFrames : null);

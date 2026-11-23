@@ -187,6 +187,14 @@ public sealed class WavAudioTests
     }
 
     [Fact]
+    public void A_declared_audio_length_that_ends_inside_a_sample_frame_is_rejected()
+    {
+        var wav = Wav(Pcm, 16, 1, 16_000, [1, 0, 2]);
+
+        Rejected(wav, "inside a sample");
+    }
+
+    [Fact]
     public void Samples_that_are_not_finite_numbers_are_rejected() =>
         Rejected(Wav(IeeeFloat, 32, 1, 16_000, FloatBytes([0f, float.NaN])), "not finite");
 
