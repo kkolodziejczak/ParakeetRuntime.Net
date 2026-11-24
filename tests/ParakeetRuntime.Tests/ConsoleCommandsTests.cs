@@ -46,6 +46,8 @@ public sealed class ConsoleCommandsTests : IDisposable
     [InlineData("transcribe", "a.wav", "--device", "tpu")]
     [InlineData("transcribe", "a.wav", "--colour", "red")]
     [InlineData("download", "--from")]
+    [InlineData("transcribe", "")]
+    [InlineData("download", "--from", " ")]
     public async Task A_command_line_that_is_not_understood_shows_the_usage_and_exits_with_2(params string[] args)
     {
         var exit = await Run(MissingModel, "", args);
@@ -150,6 +152,59 @@ public sealed class ConsoleCommandsTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("Press Enter", errors.ToString());
         Assert.EndsWith(Environment.NewLine, output.ToString());
+    }
+
+    [InstalledModelAndMicrophoneFact]
+    public async Task Cancelling_record_while_it_waits_for_Enter_ends_it_at_once()
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var exit = await ConsoleCommands.RunAsync(["record", "--device", "cpu"], SpeechModel.Default(), new ReaderThatNeverAnswers(), output, errors, cancellation.Token)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Cancelled.", errors.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [Theory]
+    [InlineData("transcribe", "--list-gpus")]
+    [InlineData("record", "--corpus", "list.txt")]
+    public void A_user_command_with_a_benchmark_flag_is_not_run_as_a_benchmark(params string[] args)
+    {
+        var (exit, standardOutput) = RunTheExe(args);
+
+        Assert.Equal(2, exit);
+        Assert.Empty(standardOutput);
+    }
+
+    private static (int Exit, string StandardOutput) RunTheExe(string[] args)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "parakeet-runtime.exe"))
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in args)
+            start.ArgumentList.Add(arg);
+        using var exe = System.Diagnostics.Process.Start(start)!;
+        var standardOutput = exe.StandardOutput.ReadToEndAsync();
+        _ = exe.StandardError.ReadToEndAsync();
+        if (!exe.WaitForExit(30_000))
+        {
+            exe.Kill(entireProcessTree: true);
+            Assert.Fail("parakeet-runtime.exe did not exit within 30 seconds.");
+        }
+        return (exe.ExitCode, standardOutput.Result);
+    }
+
+    private sealed class ReaderThatNeverAnswers : TextReader
+    {
+        private readonly TaskCompletionSource<string?> never = new();
+
+        public override Task<string?> ReadLineAsync() => never.Task;
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) => new(never.Task);
     }
 
     private static byte[] ToneWav(int seconds)

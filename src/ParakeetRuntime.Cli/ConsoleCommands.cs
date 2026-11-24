@@ -24,6 +24,8 @@ internal static class ConsoleCommands
 
     private const int Done = 0, Failed = 1, NotUnderstood = 2;
 
+    public static bool IsUserCommand(string[] args) => args is [] or ["transcribe" or "record" or "download" or "--help" or "-h" or "/?", ..];
+
     public static async Task<int> RunAsync(string[] args, SpeechModel model, TextReader input, TextWriter output, TextWriter errors, CancellationToken cancellationToken)
     {
         try
@@ -31,12 +33,12 @@ internal static class ConsoleCommands
             return args switch
             {
                 [] or ["--help" or "-h" or "/?"] => ShowUsage(output, Done),
-                ["transcribe", var path, .. var rest] when DeviceOption(rest) is { } options =>
+                ["transcribe", var path, .. var rest] when IsPath(path) && DeviceOption(rest) is { } options =>
                     await TranscribeAsync(path, options, model, output, errors, cancellationToken),
                 ["record", .. var rest] when DeviceOption(rest) is { } options =>
                     await RecordAsync(options, model, input, output, errors, cancellationToken),
                 ["download"] => await DownloadAsync(from: null, model, errors, cancellationToken),
-                ["download", "--from", var from] => await DownloadAsync(from, model, errors, cancellationToken),
+                ["download", "--from", var from] when IsPath(from) => await DownloadAsync(from, model, errors, cancellationToken),
                 _ => ShowUsage(errors, NotUnderstood)
             };
         }
@@ -46,6 +48,8 @@ internal static class ConsoleCommands
             return Failed;
         }
     }
+
+    private static bool IsPath(string arg) => !string.IsNullOrWhiteSpace(arg) && !arg.StartsWith("--", StringComparison.Ordinal);
 
     private static int ShowUsage(TextWriter to, int exitCode)
     {
@@ -75,7 +79,7 @@ internal static class ConsoleCommands
             output.WriteLine(await engine.TranscribeWavAsync(wav, cancellationToken));
             return Done;
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         {
             errors.WriteLine(exception is FileNotFoundException or DirectoryNotFoundException ? $"There is no file {Path.GetFullPath(path)}." : exception.Message);
             return Failed;
@@ -90,9 +94,18 @@ internal static class ConsoleCommands
         {
             using var recording = Microphone.StartRecording();
             var loading = SpeechEngine.LoadAsync(model, options, cancellationToken);
-            errors.WriteLine("Recording from the default microphone (at most 10 minutes). Press Enter to stop.");
-            await input.ReadLineAsync(cancellationToken);
-            var samples = recording.Stop();
+            float[] samples;
+            try
+            {
+                errors.WriteLine("Recording from the default microphone (at most 10 minutes). Press Enter to stop.");
+                await input.ReadLineAsync(cancellationToken).AsTask().WaitAsync(cancellationToken);
+                samples = recording.Stop();
+            }
+            catch
+            {
+                _ = loading.ContinueWith(loaded => loaded.Result.Dispose(), TaskContinuationOptions.OnlyOnRanToCompletion);
+                throw;
+            }
             using var engine = await loading;
             errors.WriteLine($"Transcribing {samples.Length / 16_000.0:0.0} s on {engine.Backend}.");
             output.WriteLine(await engine.TranscribeAsync(samples, cancellationToken));
@@ -134,7 +147,7 @@ internal static class ConsoleCommands
             errors.WriteLine($"The speech model is installed at {model.Path}.");
             return Done;
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or HttpRequestException or TimeoutException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or HttpRequestException or TimeoutException)
         {
             errors.WriteLine();
             errors.WriteLine(exception is FileNotFoundException or DirectoryNotFoundException && from is not null ? $"There is no file {Path.GetFullPath(from)}." : exception.Message);
