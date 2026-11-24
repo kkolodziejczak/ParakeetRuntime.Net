@@ -9,6 +9,8 @@ internal sealed record ServerSettings(
     Func<IProgress<double>, CancellationToken, Task> InstallModel)
 {
     public long UploadByteLimit { get; init; } = 256L * 1024 * 1024;
+
+    public TimeSpan UploadDeadline { get; init; } = TimeSpan.FromMinutes(1);
 }
 
 internal sealed record ModelSource(string Source, long Bytes, string Folder);

@@ -17,12 +17,14 @@ internal sealed class LocalServer : IAsyncDisposable
 {
     private const int MostRunning = 1, MostWaiting = 1;
     private const int LongestFieldValue = 64;
+    private const int LongestMultipartBoundary = 70;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private readonly WebApplication app;
     private readonly ModelState state;
     private readonly string authority;
     private readonly long uploadByteLimit;
+    private readonly TimeSpan uploadDeadline;
     private readonly SemaphoreSlim admitted = new(MostRunning + MostWaiting);
     private readonly SemaphoreSlim running = new(MostRunning);
 
@@ -30,6 +32,7 @@ internal sealed class LocalServer : IAsyncDisposable
     {
         authority = $"127.0.0.1:{settings.Port}";
         uploadByteLimit = settings.UploadByteLimit;
+        uploadDeadline = settings.UploadDeadline;
         Origin = $"http://{authority}";
         state = new ModelState(settings, Version);
         var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions());
@@ -83,12 +86,11 @@ internal sealed class LocalServer : IAsyncDisposable
         await next(context);
     }
 
-    private bool FromThisServersPageOrNoPage(HttpRequest request)
-    {
-        var origin = request.Headers.Origin.ToString();
-        var site = request.Headers["Sec-Fetch-Site"].ToString();
-        return (origin.Length == 0 || origin == Origin) && (site.Length == 0 || site == "same-origin");
-    }
+    private bool FromThisServersPageOrNoPage(HttpRequest request) =>
+        AbsentOrExactly(request, "Origin", Origin) && AbsentOrExactly(request, "Sec-Fetch-Site", "same-origin");
+
+    private static bool AbsentOrExactly(HttpRequest request, string header, string allowed) =>
+        !request.Headers.TryGetValue(header, out var values) || values == allowed;
 
     private async Task HealthAsync(HttpContext context)
     {
@@ -156,22 +158,34 @@ internal sealed class LocalServer : IAsyncDisposable
             await ErrorAsync(context, StatusCodes.Status415UnsupportedMediaType, "not-multipart", "Send multipart/form-data with one 'file' part holding a WAV.");
             return;
         }
-        var reader = new MultipartReader(boundary, context.Request.Body);
+        if (boundary.Length > LongestMultipartBoundary)
+        {
+            await ErrorAsync(context, StatusCodes.Status400BadRequest, "bad-request", $"The multipart boundary is longer than {LongestMultipartBoundary} characters.");
+            return;
+        }
         using var wav = new MemoryStream();
         var files = 0;
-        var asText = false;
+        string? format = "json";
+        using var uploading = CancellationTokenSource.CreateLinkedTokenSource(aborted);
+        uploading.CancelAfter(uploadDeadline);
         try
         {
-            while (await reader.ReadNextSectionAsync(aborted) is { } section)
+            var reader = new MultipartReader(boundary, context.Request.Body);
+            while (await reader.ReadNextSectionAsync(uploading.Token) is { } section)
             {
-                var name = ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition) ? disposition.Name.Value : null;
+                var name = ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition) ? HeaderUtilities.RemoveQuotes(disposition.Name).Value : null;
                 if (name == "file" && ++files == 1)
-                    await section.Body.CopyToAsync(wav, aborted);
+                    await section.Body.CopyToAsync(wav, uploading.Token);
                 else if (name == "response_format")
-                    asText = await ShortValueAsync(section.Body, aborted) == "text";
+                    format = await ShortValueAsync(section.Body, uploading.Token);
                 else
-                    await section.Body.DrainAsync(aborted);
+                    await section.Body.DrainAsync(uploading.Token);
             }
+        }
+        catch (OperationCanceledException) when (!aborted.IsCancellationRequested)
+        {
+            await ErrorAsync(context, StatusCodes.Status408RequestTimeout, "upload-too-slow", $"The upload did not arrive within {uploadDeadline.TotalSeconds:0} seconds.");
+            return;
         }
         catch (BadHttpRequestException tooLarge) when (tooLarge.StatusCode == StatusCodes.Status413PayloadTooLarge)
         {
@@ -181,6 +195,11 @@ internal sealed class LocalServer : IAsyncDisposable
         catch (Exception malformed) when (malformed is IOException or InvalidDataException && !aborted.IsCancellationRequested)
         {
             await ErrorAsync(context, StatusCodes.Status400BadRequest, "bad-request", "The multipart body is malformed.");
+            return;
+        }
+        if (format is not ("json" or "text"))
+        {
+            await ErrorAsync(context, StatusCodes.Status400BadRequest, "bad-format", "response_format is json or text.");
             return;
         }
         if (files != 1)
@@ -206,8 +225,17 @@ internal sealed class LocalServer : IAsyncDisposable
             await ErrorAsync(context, status, code, rejected.Message);
             return;
         }
-        var text = await engine.TranscribeAsync(samples, aborted);
-        if (asText)
+        string text;
+        try
+        {
+            text = await engine.TranscribeAsync(samples, aborted);
+        }
+        catch (ObjectDisposedException)
+        {
+            await ErrorAsync(context, StatusCodes.Status503ServiceUnavailable, "stopping", "The server is stopping.");
+            return;
+        }
+        if (format == "text")
         {
             context.Response.ContentType = "text/plain; charset=utf-8";
             await context.Response.WriteAsync(text, aborted);
@@ -216,13 +244,13 @@ internal sealed class LocalServer : IAsyncDisposable
             await context.Response.WriteAsJsonAsync(new { text, duration = Math.Round(samples.Length / (double)Wav.SampleRate, 3) }, Json, aborted);
     }
 
-    private static async Task<string> ShortValueAsync(Stream body, CancellationToken cancellationToken)
+    private static async Task<string?> ShortValueAsync(Stream body, CancellationToken cancellationToken)
     {
-        var buffer = new char[LongestFieldValue];
+        var buffer = new char[LongestFieldValue + 1];
         using var reader = new StreamReader(body, leaveOpen: true);
         var read = await reader.ReadBlockAsync(buffer, cancellationToken);
         await body.DrainAsync(cancellationToken);
-        return new string(buffer, 0, read).Trim();
+        return read > LongestFieldValue ? null : new string(buffer, 0, read).Trim();
     }
 
     private static Task ErrorAsync(HttpContext context, int status, string code, string message)

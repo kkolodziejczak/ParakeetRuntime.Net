@@ -132,6 +132,70 @@ public sealed class LocalServerTests : IAsyncDisposable
         Assert.Empty(recognizer.Calls);
     }
 
+    [Theory]
+    [InlineData("Origin")]
+    [InlineData("Sec-Fetch-Site")]
+    public async Task A_page_header_that_is_present_but_empty_is_refused(string header)
+    {
+        await InstallTheModelAsync();
+        using var client = await StartReadyAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/audio/transcriptions") { Content = Upload(Wav(seconds: 1)) };
+        Assert.True(request.Headers.TryAddWithoutValidation(header, ""));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_upload_slower_than_the_deadline_gives_up_its_place()
+    {
+        await InstallTheModelAsync();
+        using var client = await StartReadyAsync(uploadDeadline: TimeSpan.FromMilliseconds(500));
+        using var stopTrickling = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var trickles = Enumerable.Range(0, 2).Select(_ => SendQuietlyAsync(client, new TricklingUpload(), stopTrickling.Token)).ToList();
+        await Task.Delay(1500);
+
+        using var response = await client.PostAsync("/v1/audio/transcriptions", Upload(Wav(seconds: 1)));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await stopTrickling.CancelAsync();
+        await Task.WhenAll(trickles);
+    }
+
+    private static async Task SendQuietlyAsync(HttpClient client, HttpContent content, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await client.PostAsync("/v1/audio/transcriptions", content, cancellationToken);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
+        {
+        }
+    }
+
+    private sealed class TricklingUpload : HttpContent
+    {
+        public TricklingUpload() => Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=slow");
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await stream.WriteAsync("--slow\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n\r\n"u8.ToArray());
+            for (var i = 0; i < 100; i++)
+            {
+                await stream.WriteAsync(new byte[16]);
+                await stream.FlushAsync();
+                await Task.Delay(100);
+            }
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
     [Fact]
     public async Task An_upload_from_the_servers_own_page_is_accepted()
     {
@@ -155,6 +219,10 @@ public sealed class LocalServerTests : IAsyncDisposable
         { "unsupported-wav", 415, "unsupported-wav" },
         { "damaged-wav", 400, "damaged-wav" },
         { "too-long", 422, "too-long" },
+        { "huge-boundary", 400, "bad-request" },
+        { "unknown-format", 400, "bad-format" },
+        { "empty-format", 400, "bad-format" },
+        { "format-with-a-long-tail", 400, "bad-format" },
     };
 
     [Theory]
@@ -280,14 +348,14 @@ public sealed class LocalServerTests : IAsyncDisposable
 
     private Task InstallTheModelAsync() => model.InstallFromFileAsync(@"C:\copy\tiny.gguf", null, CancellationToken.None);
 
-    private async Task<HttpClient> StartReadyAsync(long uploadByteLimit = 256L << 20)
+    private async Task<HttpClient> StartReadyAsync(long uploadByteLimit = 256L << 20, TimeSpan? uploadDeadline = null)
     {
-        var client = await StartAsync(uploadByteLimit: uploadByteLimit);
+        var client = await StartAsync(uploadByteLimit: uploadByteLimit, uploadDeadline: uploadDeadline);
         (await ReadyHealthAsync(client)).Dispose();
         return client;
     }
 
-    private async Task<HttpClient> StartAsync(Func<CancellationToken, Task<SpeechEngine>>? load = null, long uploadByteLimit = 256L << 20)
+    private async Task<HttpClient> StartAsync(Func<CancellationToken, Task<SpeechEngine>>? load = null, long uploadByteLimit = 256L << 20, TimeSpan? uploadDeadline = null)
     {
         var port = FreePort();
         var settings = new ServerSettings(
@@ -297,6 +365,7 @@ public sealed class LocalServerTests : IAsyncDisposable
             (progress, cancellationToken) => model.InstallFromFileAsync(@"C:\copy\tiny.gguf", progress, cancellationToken))
         {
             UploadByteLimit = uploadByteLimit,
+            UploadDeadline = uploadDeadline ?? TimeSpan.FromMinutes(1),
         };
         servers.Add(await LocalServer.StartAsync(settings, CancellationToken.None));
         return new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(30) };
@@ -340,8 +409,19 @@ public sealed class LocalServerTests : IAsyncDisposable
         "unsupported-wav" => Upload([.. WavAudioTests.WavHeader(1, 12, 1, 16_000, 64), .. new byte[64]]),
         "damaged-wav" => Upload(Wav(seconds: 1)[..^3]),
         "too-long" => Upload(WavAudioTests.WavHeader(1, 16, 1, 16_000, 16_000 * 2 * 601)),
+        "huge-boundary" => new ByteArrayContent(Wav(seconds: 1)) { Headers = { ContentType = MediaTypeHeaderValue.Parse($"multipart/form-data; boundary={new string('x', 4096)}") } },
+        "unknown-format" => WithFormat("xml"),
+        "empty-format" => WithFormat(""),
+        "format-with-a-long-tail" => WithFormat("text" + new string(' ', 60) + "xml"),
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
+
+    private static MultipartFormDataContent WithFormat(string format)
+    {
+        var form = Upload(Wav(seconds: 1));
+        form.Add(new StringContent(format), "response_format");
+        return form;
+    }
 
     private static byte[] Wav(double seconds)
     {
