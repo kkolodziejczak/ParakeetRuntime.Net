@@ -47,6 +47,8 @@ public sealed class ConsoleCommandsTests : IDisposable
     [InlineData("transcribe", "a.wav", "--colour", "red")]
     [InlineData("download", "--from")]
     [InlineData("transcribe", "")]
+    [InlineData("serve", "--port", "http")]
+    [InlineData("serve", "--port", "70000")]
     [InlineData("download", "--from", " ")]
     public async Task A_command_line_that_is_not_understood_shows_the_usage_and_exits_with_2(params string[] args)
     {
@@ -165,6 +167,61 @@ public sealed class ConsoleCommandsTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains("Cancelled.", errors.ToString());
         Assert.Empty(output.ToString());
+    }
+
+    [Fact]
+    public async Task Serve_answers_on_its_port_until_cancelled_and_says_how_to_get_the_model()
+    {
+        var port = FreePort();
+        using var stop = new CancellationTokenSource();
+        var serving = ConsoleCommands.RunAsync(["serve", "--port", port.ToString(), "--device", "cpu"], MissingModel, new StringReader(""), output, errors, stop.Token);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+
+        var health = await HealthWhenUpAsync(client);
+        await stop.CancelAsync();
+        var exit = await serving.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, health);
+        Assert.Equal(0, exit);
+        Assert.Contains($"http://127.0.0.1:{port}/", errors.ToString());
+        Assert.Contains("parakeet-runtime download", errors.ToString());
+    }
+
+    [Fact]
+    public async Task Serve_on_a_port_in_use_says_so_and_exits_with_1()
+    {
+        using var taken = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        taken.Start();
+        var port = ((System.Net.IPEndPoint)taken.LocalEndpoint).Port;
+
+        var exit = await Run(MissingModel, "", "serve", "--port", port.ToString());
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"Port {port} is already in use", errors.ToString());
+    }
+
+    private static int FreePort()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+    }
+
+    private static async Task<System.Net.HttpStatusCode> HealthWhenUpAsync(HttpClient client)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                using var response = await client.GetAsync("/health");
+                return response.StatusCode;
+            }
+            catch (HttpRequestException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(50);
+            }
+        }
     }
 
     [Theory]

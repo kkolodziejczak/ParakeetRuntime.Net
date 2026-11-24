@@ -8,7 +8,7 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | --- | --- |
 | `ParakeetRuntime.Net.slnx` | The solution. |
 | `src/ParakeetRuntime` | The engine library, packed as the `ParakeetRuntime` NuGet package. Plain `net10.0`, marked Windows-only. |
-| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file: the user commands `transcribe`, `record` and `download` (`ConsoleCommands.cs`), and the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
+| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file: the user commands `transcribe`, `record`, `download` and `serve` (`ConsoleCommands.cs`; the HTTP server on Kestrel, loopback only, in `LocalServer.cs` and `ModelState.cs`), and the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
 | `tests/ParakeetRuntime.Tests` | xUnit tests: kernels, GGUF reading, GPU kernels (skipped without a GPU), and the real model (skipped when it isn't installed). |
 | `scripts/Run-Matrix.ps1` | The full speed matrix against NeMo-Speech.cpp, one run at a time, through `parakeet-runtime.exe --corpus`. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |

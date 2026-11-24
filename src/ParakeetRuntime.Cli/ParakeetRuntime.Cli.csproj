@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.1" />
   </ItemGroup>
@@ -17,5 +21,12 @@
     <ProjectReference Include="..\ParakeetRuntime\ParakeetRuntime.csproj" />
     <InternalsVisibleTo Include="ParakeetRuntime.Tests" />
   </ItemGroup>
+
+  <!-- The server is Kestrel on loopback only; the IIS in-process module would ship as a second file next to the exe. -->
+  <Target Name="LeaveOutTheIisModule" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'aspnetcorev2_inprocess.dll'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

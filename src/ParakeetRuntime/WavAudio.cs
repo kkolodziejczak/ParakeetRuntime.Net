@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 
 namespace ParakeetRuntime;
 
+internal enum WavProblem { NotWav, Unsupported, Damaged, TooLong }
+
 internal static class WavAudio
 {
     public static readonly TimeSpan LongestAudio = TimeSpan.FromMinutes(10);
@@ -18,22 +20,22 @@ internal static class WavAudio
     {
         var header = TryReadExactly(wav, 12);
         if (header is null || !header.AsSpan(0, 4).SequenceEqual("RIFF"u8) || !header.AsSpan(8, 4).SequenceEqual("WAVE"u8))
-            throw new InvalidDataException("This is not a WAV file (no RIFF/WAVE header). Only WAV audio is supported.");
+            throw Rejected(WavProblem.NotWav, "This is not a WAV file (no RIFF/WAVE header). Only WAV audio is supported.");
         Format? format = null;
         while (true)
         {
-            var chunk = TryReadExactly(wav, 8) ?? throw new InvalidDataException("The WAV file has no audio data.");
+            var chunk = TryReadExactly(wav, 8) ?? throw Rejected(WavProblem.Damaged, "The WAV file has no audio data.");
             var size = BinaryPrimitives.ReadUInt32LittleEndian(chunk.AsSpan(4));
             if (chunk.AsSpan(0, 4).SequenceEqual("fmt "u8))
             {
                 if (size is < 16 or > LargestFmtChunk)
-                    throw new InvalidDataException("The WAV format chunk has an invalid size.");
+                    throw Rejected(WavProblem.Damaged, "The WAV format chunk has an invalid size.");
                 format = Format.Parse(ReadExactly(wav, (int)size, "the format chunk"));
                 Skip(wav, size & 1);
             }
             else if (chunk.AsSpan(0, 4).SequenceEqual("data"u8))
             {
-                var known = format ?? throw new InvalidDataException("The WAV audio data comes before its format.");
+                var known = format ?? throw Rejected(WavProblem.Damaged, "The WAV audio data comes before its format.");
                 return ReadData(wav, known, size, longest);
             }
             else
@@ -57,15 +59,15 @@ internal static class WavAudio
             if (encoding == Extensible)
             {
                 if (fmt.Length < 40 || !fmt.AsSpan(26, 14).SequenceEqual(KsDataFormatGuidTail))
-                    throw new InvalidDataException("The WAV file's extensible format is not supported. Use PCM or float audio.");
+                    throw Rejected(WavProblem.Unsupported, "The WAV file's extensible format is not supported. Use PCM or float audio.");
                 encoding = BinaryPrimitives.ReadUInt16LittleEndian(fmt.AsSpan(24));
             }
             if ((encoding, bits) is not ((Pcm, 8 or 16 or 24 or 32) or (IeeeFloat, 32 or 64)))
-                throw new InvalidDataException($"The WAV encoding is not supported (format {encoding}, {bits} bits). Use PCM at 8, 16, 24 or 32 bits, or float at 32 or 64 bits.");
+                throw Rejected(WavProblem.Unsupported, $"The WAV encoding is not supported (format {encoding}, {bits} bits). Use PCM at 8, 16, 24 or 32 bits, or float at 32 or 64 bits.");
             if (channels is < 1 or > 8 || rate is < 8_000 or > 192_000)
-                throw new InvalidDataException($"WAV audio with {channels} channels at {rate} Hz is not supported. Use 1 to 8 channels at 8,000 to 192,000 Hz.");
+                throw Rejected(WavProblem.Unsupported, $"WAV audio with {channels} channels at {rate} Hz is not supported. Use 1 to 8 channels at 8,000 to 192,000 Hz.");
             if (blockAlign != channels * bits / 8)
-                throw new InvalidDataException("The WAV format has an invalid block size.");
+                throw Rejected(WavProblem.Damaged, "The WAV format has an invalid block size.");
             return new Format(encoding, channels, rate, bits);
         }
     }
@@ -76,7 +78,7 @@ internal static class WavAudio
         var lengthIsKnown = declaredBytes != UnknownLengthMarker;
         var declaredFrames = declaredBytes / format.BytesPerFrame;
         if (lengthIsKnown && declaredBytes % format.BytesPerFrame != 0)
-            throw new InvalidDataException("The WAV audio ends inside a sample frame.");
+            throw Rejected(WavProblem.Damaged, "The WAV audio ends inside a sample frame.");
         if (lengthIsKnown && declaredFrames > maxFrames)
             throw TooLong(longest);
         var resampler = new ResamplerTo16Khz(format.SampleRate, lengthIsKnown ? declaredFrames : null);
@@ -102,14 +104,20 @@ internal static class WavAudio
             bytes.AsSpan(whole * format.BytesPerFrame, carry).CopyTo(bytes);
         }
         if (lengthIsKnown && bytesLeft > 0)
-            throw new InvalidDataException($"The WAV file ends after {frames / (double)format.SampleRate:0.0} of {declaredFrames / (double)format.SampleRate:0.0} seconds of audio.");
+            throw Rejected(WavProblem.Damaged, $"The WAV file ends after {frames / (double)format.SampleRate:0.0} of {declaredFrames / (double)format.SampleRate:0.0} seconds of audio.");
         if (carry != 0)
-            throw new InvalidDataException("The WAV audio ends inside a sample frame.");
+            throw Rejected(WavProblem.Damaged, "The WAV audio ends inside a sample frame.");
         return resampler.Finish();
     }
 
     private static InvalidDataException TooLong(TimeSpan longest) =>
-        new($"The audio is longer than {longest.TotalMinutes:0.##} minutes, the most one call transcribes.");
+        Rejected(WavProblem.TooLong, $"The audio is longer than {longest.TotalMinutes:0.##} minutes, the most one call transcribes.");
+
+    public static WavProblem ProblemOf(InvalidDataException rejection) =>
+        rejection.Data[nameof(WavProblem)] is WavProblem problem ? problem : WavProblem.Damaged;
+
+    private static InvalidDataException Rejected(WavProblem problem, string message) =>
+        new(message) { Data = { [nameof(WavProblem)] = problem } };
 
     private static void ToMono(ReadOnlySpan<byte> data, Format format, Span<float> mono)
     {
@@ -121,7 +129,7 @@ internal static class WavAudio
                 sum += Sample(data.Slice(offset + channel * bytesPerSample, bytesPerSample), format.Encoding, format.BitsPerSample);
             var average = sum / format.Channels;
             if (!float.IsFinite(average))
-                throw new InvalidDataException("The WAV file holds samples that are not finite numbers.");
+                throw Rejected(WavProblem.Damaged, "The WAV file holds samples that are not finite numbers.");
             mono[frame] = average;
         }
     }
@@ -137,7 +145,7 @@ internal static class WavAudio
     };
 
     private static byte[] ReadExactly(Stream stream, int count, string what) =>
-        TryReadExactly(stream, count) ?? throw new InvalidDataException($"The WAV file ends inside {what}.");
+        TryReadExactly(stream, count) ?? throw Rejected(WavProblem.Damaged, $"The WAV file ends inside {what}.");
 
     private static byte[]? TryReadExactly(Stream stream, int count)
     {
@@ -152,7 +160,7 @@ internal static class WavAudio
         if (stream.CanSeek)
         {
             if (stream.Position + count > stream.Length)
-                throw new InvalidDataException("The WAV file ends inside a chunk.");
+                throw Rejected(WavProblem.Damaged, "The WAV file ends inside a chunk.");
             stream.Seek(count, SeekOrigin.Current);
             return;
         }
@@ -161,7 +169,7 @@ internal static class WavAudio
         {
             var read = stream.Read(scratch, 0, (int)Math.Min(scratch.Length, count));
             if (read == 0)
-                throw new InvalidDataException("The WAV file ends inside a chunk.");
+                throw Rejected(WavProblem.Damaged, "The WAV file ends inside a chunk.");
             count -= read;
         }
     }

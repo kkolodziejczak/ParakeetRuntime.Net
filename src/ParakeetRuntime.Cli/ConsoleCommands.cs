@@ -9,10 +9,16 @@ internal static class ConsoleCommands
           parakeet-runtime transcribe <file.wav> [--device cpu|gpu|gpu:<name>]   prints the text of a WAV file
           parakeet-runtime record [--device cpu|gpu|gpu:<name>]                  records the default microphone until Enter, prints the text
           parakeet-runtime download [--from <file.gguf>]                         installs the speech model (714 MB), or from a local copy
+          parakeet-runtime serve [--port 5092] [--device cpu|gpu|gpu:<name>]    serves the HTTP API on 127.0.0.1 until Ctrl+C
           parakeet-runtime --help | --version
 
         The text goes to standard output; messages go to standard error. --device defaults to a GPU
         when one is usable, else the CPU.
+
+        HTTP API of serve:
+          POST /v1/audio/transcriptions   multipart/form-data with one 'file' part (a WAV); optional
+                                          response_format=text. Answers {"text": ..., "duration": seconds}.
+          GET  /health                    the model's status: no-model, downloading, loading, ready or failed.
 
         Benchmarks:
           parakeet-runtime --list-gpus
@@ -23,8 +29,9 @@ internal static class ConsoleCommands
         """;
 
     private const int Done = 0, Failed = 1, NotUnderstood = 2;
+    private const int DefaultPort = 5092;
 
-    public static bool IsUserCommand(string[] args) => args is [] or ["transcribe" or "record" or "download" or "--help" or "-h" or "/?", ..];
+    public static bool IsUserCommand(string[] args) => args is [] or ["transcribe" or "record" or "download" or "serve" or "--help" or "-h" or "/?", ..];
 
     public static async Task<int> RunAsync(string[] args, SpeechModel model, TextReader input, TextWriter output, TextWriter errors, CancellationToken cancellationToken)
     {
@@ -39,6 +46,8 @@ internal static class ConsoleCommands
                     await RecordAsync(options, model, input, output, errors, cancellationToken),
                 ["download"] => await DownloadAsync(from: null, model, errors, cancellationToken),
                 ["download", "--from", var from] when IsPath(from) => await DownloadAsync(from, model, errors, cancellationToken),
+                ["serve", .. var rest] when ServeOptions(rest) is var (port, options) =>
+                    await ServeAsync(port, options, model, errors, cancellationToken),
                 _ => ShowUsage(errors, NotUnderstood)
             };
         }
@@ -66,6 +75,43 @@ internal static class ConsoleCommands
             new SpeechEngineOptions(GpuNameContains: device[4..]),
         _ => null
     };
+
+    private static (int Port, SpeechEngineOptions Engine)? ServeOptions(string[] rest) => rest switch
+    {
+        ["--port", var port, .. var more] when IsPort(port, out var number) && DeviceOption(more) is { } engine => (number, engine),
+        [.. var device, "--port", var port] when IsPort(port, out var number) && DeviceOption(device) is { } engine => (number, engine),
+        _ when DeviceOption(rest) is { } engine => (DefaultPort, engine),
+        _ => null
+    };
+
+    private static bool IsPort(string text, out int port) => int.TryParse(text, out port) && port is > 0 and <= ushort.MaxValue;
+
+    private static async Task<int> ServeAsync(int port, SpeechEngineOptions options, SpeechModel model, TextWriter errors, CancellationToken cancellationToken)
+    {
+        var settings = new ServerSettings(port, model,
+            loading => SpeechEngine.LoadAsync(model, options, loading),
+            (progress, installing) => model.EnsureInstalledAsync(progress, installing));
+        try
+        {
+            await using var server = await LocalServer.StartAsync(settings, cancellationToken);
+            errors.WriteLine($"Serving on {server.Origin}/ until Ctrl+C. Transcribe with:");
+            errors.WriteLine($"  curl.exe -F file=@speech.wav {server.Origin}/v1/audio/transcriptions");
+            if (!model.IsInstalled)
+                ModelMissing(model, errors);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return Done;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            errors.WriteLine("Stopped.");
+            return Done;
+        }
+        catch (IOException exception)
+        {
+            errors.WriteLine(exception.Message);
+            return Failed;
+        }
+    }
 
     private static async Task<int> TranscribeAsync(string path, SpeechEngineOptions options, SpeechModel model, TextWriter output, TextWriter errors, CancellationToken cancellationToken)
     {

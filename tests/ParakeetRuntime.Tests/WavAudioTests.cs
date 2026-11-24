@@ -230,6 +230,18 @@ public sealed class WavAudioTests
         Assert.True(allocatedMegabytes < 80, $"Allocated {allocatedMegabytes:0} MB; the 16 kHz result alone is 37 MB, the 192 kHz source would be 880 MB.");
     }
 
+    [Fact]
+    public void Each_rejection_names_its_kind_of_problem()
+    {
+        Assert.Equal(WavProblem.NotWav, ProblemOf("ID3 an mp3 file"u8.ToArray()));
+        Assert.Equal(WavProblem.Unsupported, ProblemOf(Wav(Pcm, 12, 1, 16_000, new byte[64])));
+        Assert.Equal(WavProblem.Damaged, ProblemOf(Wav(Pcm, 16, 1, 16_000, PcmBytes16([1, 2, 3]))[..^2]));
+        Assert.Equal(WavProblem.TooLong, ProblemOf(WavHeader(Pcm, 16, 1, 16_000, 16_000 * 2 * 601)));
+    }
+
+    private static WavProblem ProblemOf(byte[] wav) =>
+        WavAudio.ProblemOf(Assert.Throws<InvalidDataException>(() => Read(wav)));
+
     private static float[] Read(byte[] wav) => WavAudio.Read16KhzMono(new MemoryStream(wav), TenMinutes);
 
     private static void Rejected(byte[] wav, string messagePart) => Rejected(new MemoryStream(wav), messagePart);
