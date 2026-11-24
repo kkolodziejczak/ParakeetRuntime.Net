@@ -105,6 +105,63 @@ public sealed class MicrophoneRecordingTests
         Assert.All(packets.Handed, packet => Assert.All(packet, sample => Assert.Equal(0f, sample)));
     }
 
+    [Fact]
+    public void Audio_from_a_microphone_that_opens_after_the_start_timeout_is_cleared_and_dropped()
+    {
+        using var opening = new ManualResetEventSlim();
+        var packets = new Packets([0.5f, 0.25f]);
+        Assert.Throws<IOException>(() => new MicrophoneRecording(() => { opening.Wait(); return packets; }, TenMinutes, TimeSpan.FromMilliseconds(100)));
+
+        opening.Set();
+        WaitUntil(() => packets.Disposed);
+
+        Assert.All(packets.Handed, packet => Assert.All(packet, sample => Assert.Equal(0f, sample)));
+    }
+
+    [Fact]
+    public void A_recording_that_reached_its_longest_duration_is_not_recording_while_the_microphone_closes()
+    {
+        using var closing = new ManualResetEventSlim();
+        using var recording = new MicrophoneRecording(() => new Packets([1f, 2f]) { DisposeWaitsFor = closing }, TimeSpan.FromSeconds(1 / 16_000.0), Patience);
+
+        WaitUntil(() => !recording.IsRecording);
+
+        closing.Set();
+        Assert.Equal([1f], recording.Stop());
+    }
+
+    [Fact]
+    public void The_longest_duration_holds_for_very_long_values()
+    {
+        using var recording = new MicrophoneRecording(() => new Packets([1f, 2f]), TimeSpan.FromDays(668), Patience);
+
+        Assert.Equal([1f, 2f], recording.Stop());
+    }
+
+    [Fact]
+    public void Level_stays_within_0_and_1_for_audio_beyond_full_scale()
+    {
+        using var recording = new MicrophoneRecording(() => new Packets([2f, -2f]), TenMinutes, Patience);
+
+        WaitUntil(() => recording.Duration > TimeSpan.Zero);
+
+        Assert.Equal(1f, recording.Level);
+    }
+
+    [Fact]
+    public void Disposing_again_after_a_microphone_hung_returns_at_once()
+    {
+        using var released = new ManualResetEventSlim();
+        var recording = new MicrophoneRecording(() => new Packets([1f]) { ThenHangUntil = released }, TenMinutes, TimeSpan.FromMilliseconds(300));
+        recording.Dispose();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        recording.Dispose();
+
+        Assert.True(clock.Elapsed < TimeSpan.FromMilliseconds(150), $"The second Dispose took {clock.Elapsed.TotalMilliseconds:0} ms.");
+        released.Set();
+    }
+
     private static void WaitUntil(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + Patience;
@@ -135,6 +192,12 @@ public sealed class MicrophoneRecordingTests
             return ThenFail is null ? null : throw ThenFail;
         }
 
-        public void Dispose() => Disposed = true;
+        public ManualResetEventSlim? DisposeWaitsFor { get; init; }
+
+        public void Dispose()
+        {
+            DisposeWaitsFor?.Wait();
+            Disposed = true;
+        }
     }
 }

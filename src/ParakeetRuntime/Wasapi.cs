@@ -244,14 +244,9 @@ internal static unsafe class Wasapi
             byte* data;
             uint frames, flags;
             Check(((delegate* unmanaged[Stdcall]<nint, byte**, uint*, uint*, ulong*, ulong*, int>)Vtbl(capture)[3])(capture, &data, &frames, &flags, null, null), "Reading the microphone");
-            try
-            {
-                return (flags & SilentBuffer) != 0 ? new float[frames] : new ReadOnlySpan<float>(data, (int)frames).ToArray();
-            }
-            finally
-            {
-                ((delegate* unmanaged[Stdcall]<nint, uint, int>)Vtbl(capture)[4])(capture, frames);
-            }
+            var packet = (flags & SilentBuffer) != 0 ? new float[frames] : new ReadOnlySpan<float>(data, (int)frames).ToArray();
+            Check(((delegate* unmanaged[Stdcall]<nint, uint, int>)Vtbl(capture)[4])(capture, frames), "Reading the microphone");
+            return packet;
         }
 
         public void Dispose()

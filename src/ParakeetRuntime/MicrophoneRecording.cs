@@ -17,11 +17,12 @@ public sealed class MicrophoneRecording : IDisposable
     private long recordedSamples;
     private float levelOfTheLatestPacket;
     private Exception? failure;
+    private bool capturing = true;
     private bool disposed;
 
     internal MicrophoneRecording(Func<IMicrophonePackets> open, TimeSpan longest, TimeSpan patience)
     {
-        longestInSamples = longest.Ticks * Wav.SampleRate / TimeSpan.TicksPerSecond;
+        longestInSamples = (long)((Int128)longest.Ticks * Wav.SampleRate / TimeSpan.TicksPerSecond);
         this.patience = patience;
         captureThread = new Thread(() => CaptureUntilStoppedOrFull(open)) { IsBackground = true, Name = "ParakeetRuntime microphone" };
         captureThread.Start();
@@ -31,6 +32,7 @@ public sealed class MicrophoneRecording : IDisposable
         }
         catch (TimeoutException)
         {
+            DropTheAudio();
             stopRequested.Set();
             throw new IOException($"The microphone did not start within {patience.TotalSeconds:0.#} seconds.");
         }
@@ -42,7 +44,7 @@ public sealed class MicrophoneRecording : IDisposable
     public TimeSpan Duration => TimeSpan.FromTicks(Interlocked.Read(ref recordedSamples) * TimeSpan.TicksPerSecond / Wav.SampleRate);
 
     /// <summary>
-    /// The loudness (RMS) of the latest packet, about 0 for silence and up to about 1, for a level meter.
+    /// The loudness (RMS) of the latest packet, from 0 for silence to 1 for full scale, for a level meter.
     /// </summary>
     public float Level => Volatile.Read(ref levelOfTheLatestPacket);
 
@@ -50,7 +52,7 @@ public sealed class MicrophoneRecording : IDisposable
     /// Whether the microphone is still being recorded. False after <see cref="Stop"/>, after the longest duration,
     /// and after the microphone failed.
     /// </summary>
-    public bool IsRecording => captureThread.IsAlive;
+    public bool IsRecording => Volatile.Read(ref capturing);
 
     /// <summary>
     /// Stops recording and returns everything kept. Calling it again returns the same audio.
@@ -79,8 +81,16 @@ public sealed class MicrophoneRecording : IDisposable
     /// </summary>
     public void Dispose()
     {
+        lock (gate)
+            if (disposed)
+                return;
         stopRequested.Set();
         captureThread.Join(patience);
+        DropTheAudio();
+    }
+
+    private void DropTheAudio()
+    {
         lock (gate)
         {
             foreach (var packet in packets)
@@ -92,10 +102,11 @@ public sealed class MicrophoneRecording : IDisposable
 
     private void CaptureUntilStoppedOrFull(Func<IMicrophonePackets> open)
     {
+        IMicrophonePackets? source = null;
         try
         {
-            using var source = open();
-            started.SetResult();
+            source = open();
+            started.TrySetResult();
             do
                 Keep(source);
             while (!IsFull() && !stopRequested.Wait(PollInterval));
@@ -105,6 +116,11 @@ public sealed class MicrophoneRecording : IDisposable
         {
             failure = exception;
             started.TrySetException(exception);
+        }
+        finally
+        {
+            Volatile.Write(ref capturing, false);
+            source?.Dispose();
         }
     }
 
@@ -139,6 +155,6 @@ public sealed class MicrophoneRecording : IDisposable
         double sumOfSquares = 0;
         foreach (var sample in samples)
             sumOfSquares += sample * sample;
-        return (float)Math.Sqrt(sumOfSquares / samples.Length);
+        return (float)Math.Min(1, Math.Sqrt(sumOfSquares / samples.Length));
     }
 }
