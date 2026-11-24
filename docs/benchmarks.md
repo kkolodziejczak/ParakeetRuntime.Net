@@ -839,3 +839,32 @@ layer's products.
 | 8 kHz mono PCM16 | 25/30 |
 
 At 8 kHz the two resamplers' upsampling filters differ, so 5 transcripts differ; WER was not compared.
+
+## 2026-11-24 · Long audio: NVIDIA's PyTorch model, one call, and cutting at the quietest points
+
+- **Machine:** Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti, driver 610.88, 95 GB RAM
+- **Commit:** the ParakeetRuntime commit that adds this record (`QuietestPointCutter`), on top of `f6c2b33`
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf` for ParakeetRuntime; NVIDIA's PyTorch checkpoint
+  `nvidia/parakeet-tdt-0.6b-v3` in NeMo 3.0.0 with torch 2.11.0+cu128 for the reference
+- **Audio:** FLEURS dev clips joined with 0.5 s of silence into files of about 60 s (`long60`:
+  23 English, 22 Polish) and about 120 s (`long120`: 12 English, 11 Polish), different speakers in one
+  file; the 150 English `wav16` clips for the single-clip row
+- **ParakeetRuntime command:** `parakeet-runtime --corpus <list.txt> --reference <dev.tsv> --device gpu`,
+  with `--cut` for the cut rows; no affinity; 1 pass
+- **PyTorch:** `ASRModel.from_pretrained` and `transcribe` on the whole file, with full attention, and with
+  `change_attention_model("rel_pos_local_attn", [256, 256])` as NVIDIA's model card suggests for long audio
+- **Scoring:** words lower-cased, anything other than letters and digits separates words
+
+| Audio | PyTorch, full attention | PyTorch, local attention | ParakeetRuntime, one call | ParakeetRuntime, cut |
+| --- | --- | --- | --- | --- |
+| English, single clips | 5.47% (178/3253) | not run | see 2026-11-23 | no cut (all ≤ 20 s) |
+| English `long60` | 29.79% (948/3182) | 29.79% (948/3182) | 32.24% (1026/3182) | 6.19% (197/3182) |
+| English `long120` | 44.76% (1456/3253) | 46.17% (1502/3253) | 43.38% (1411/3253) | 5.99% (195/3253) |
+| Polish `long60` | 8.67% (229/2640) | not run | 8.86% (234/2640) | 6.02% (159/2640) |
+| Polish `long120` | not run | not run | 9.92% (249/2509) | 6.14% (154/2509) |
+
+- NVIDIA's own model loses whole sentences from these files too, so the loss in one call is the
+  model's behaviour, not ParakeetRuntime's. Most English errors are deletions of 8 or more words in a row.
+- The cut rows' transcripts are identical, file for file, to the council prototype's
+  `quietest-20` runs (68/68 files); the one-call rows to its `whole-400` runs (68/68).
+- GPU compute for the 1,488 s of English `long60`: 2.18 s in one call per file, 3.01 s cut.

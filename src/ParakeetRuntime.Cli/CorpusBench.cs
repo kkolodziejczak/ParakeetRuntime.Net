@@ -45,6 +45,9 @@ internal static class CorpusBench
             return 1;
         }
         var passes = int.Parse(Value("--passes") ?? "1");
+        var cut = args.Contains("--cut");
+        if (cut && Value("--nemo") is not null)
+            throw new ArgumentException("--cut runs only on ParakeetRuntime, not with --nemo.");
         var modelPath = Value("--model") ?? SpeechModel.Default().Path;
         var device = Value("--device") ?? "cpu";
         var audioSeconds = clips.Sum(clip => clip.Seconds);
@@ -52,7 +55,7 @@ internal static class CorpusBench
         var load = Stopwatch.StartNew();
         await using IBenchEngine engine = Value("--nemo") is { } nemo
             ? await NemoEngine.StartAsync(nemo, modelPath, device, Process.GetCurrentProcess().ProcessorAffinity)
-            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath);
+            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath, cut);
         load.Stop();
         var gpuMemory = new GpuMemory(engine.ProcessId);
         gpuMemory.Sample();
@@ -100,7 +103,7 @@ internal static class CorpusBench
             if (!File.Exists(results))
                 File.WriteAllText(results, "engine\tdevice\tcorpus\tclips\taudio_s\tbest_rtf\twer\tdiff_vs_compare\tidentical\tload_s\tpeak_ram_mb\tpeak_gpu_dedicated_mb\tpeak_gpu_shared_mb\n");
             File.AppendAllText(results, string.Join('\t',
-                engine is NemoEngine ? "NeMo-Speech.cpp" : "ParakeetRuntime", device, CorpusLabel(corpus, maxSeconds), clips.Count, audioSeconds.ToString("0.0"),
+                engine is NemoEngine ? "NeMo-Speech.cpp" : "ParakeetRuntime", device, CorpusLabel(corpus, maxSeconds, cut), clips.Count, audioSeconds.ToString("0.0"),
                 (best.TotalSeconds / audioSeconds).ToString("0.00000"), referenceWer?.Percent ?? "", compareWer?.Percent ?? "",
                 compare is null ? "" : $"{identical}/{clips.Count}", load.Elapsed.TotalSeconds.ToString("0.00"),
                 engine.PeakWorkingSetMegabytes, gpuMemory.PeakDedicatedMegabytes, gpuMemory.PeakSharedMegabytes) + "\n");
@@ -125,11 +128,12 @@ internal static class CorpusBench
         ? Directory.EnumerateFiles(listFileOrWavFolder, "*.wav").Order(StringComparer.Ordinal)
         : File.ReadAllLines(listFileOrWavFolder).Where(line => line.Length > 0);
 
-    private static string CorpusLabel(string corpus, double maxSeconds)
+    private static string CorpusLabel(string corpus, double maxSeconds, bool cut)
     {
         var folder = Directory.Exists(corpus) ? Path.GetFullPath(corpus) : Path.GetDirectoryName(Path.GetFullPath(corpus))!;
         var label = $"{Path.GetFileName(Path.GetDirectoryName(folder))}/{Path.GetFileName(folder)}";
-        return double.IsInfinity(maxSeconds) ? label : $"{label}<={maxSeconds}s";
+        label = double.IsInfinity(maxSeconds) ? label : $"{label}<={maxSeconds}s";
+        return cut ? $"{label} cut" : label;
     }
 
     private sealed record Clip(string Path, string Name, double Seconds)
@@ -169,19 +173,19 @@ internal static class CorpusBench
         IEnumerable<string> StageReport();
     }
 
-    private sealed class LocalEngine(ParakeetModel model, Int8Path int8Path) : IBenchEngine
+    private sealed class LocalEngine(ParakeetModel model, Int8Path int8Path, bool cutAtQuietestPoints) : IBenchEngine
     {
         private double gpuEncoderMs, gpuDecoderMs;
 
-        public static LocalEngine Load(string path, string device, Int8Path int8Path)
+        public static LocalEngine Load(string path, string device, Int8Path int8Path, bool cutAtQuietestPoints)
         {
             if (device == "cpu")
-                return new LocalEngine(new ParakeetModel(path, int8Path), int8Path);
+                return new LocalEngine(new ParakeetModel(path, int8Path), int8Path, cutAtQuietestPoints);
             if (device != "gpu" && !device.StartsWith("gpu:", StringComparison.Ordinal))
                 throw new ArgumentException($"ParakeetRuntime's --device is cpu, gpu or gpu:<adapter>, not {device}.");
             var model = new ParakeetModel(path, allowGpu: true, device == "gpu" ? null : device["gpu:".Length..]);
             if (model.IsUsingGpu)
-                return new LocalEngine(model, int8Path);
+                return new LocalEngine(model, int8Path, cutAtQuietestPoints);
             model.Dispose();
             throw new InvalidOperationException($"No usable GPU matched {device}; see --list-gpus.");
         }
@@ -196,7 +200,11 @@ internal static class CorpusBench
 
         public long PeakWorkingSetMegabytes => Process.GetCurrentProcess().PeakWorkingSet64 >> 20;
 
-        public Task<string> TranscribeAsync(Clip clip, float[] samples)
+        public Task<string> TranscribeAsync(Clip clip, float[] samples) => Task.FromResult(cutAtQuietestPoints
+            ? QuietestPointCutter.TranscribeInPieces(samples, TranscribeInOneCall, CancellationToken.None)
+            : TranscribeInOneCall(samples));
+
+        private string TranscribeInOneCall(float[] samples)
         {
             var text = model.Transcribe(samples, out var profile);
             if (model.IsUsingGpu)
@@ -204,7 +212,7 @@ internal static class CorpusBench
                 gpuEncoderMs += profile.EncoderMs;
                 gpuDecoderMs += profile.DecodeMs;
             }
-            return Task.FromResult(text);
+            return text;
         }
 
         public void ResetClock()

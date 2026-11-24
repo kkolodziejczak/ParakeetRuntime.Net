@@ -15,7 +15,7 @@ parakeet-runtime --list-gpus
 parakeet-runtime --corpus <list.txt | wav folder> [--device cpu|gpu|gpu:<adapter>|vulkan:N] [--nemo nemo-speech.exe]
                  [--affinity C03] [--passes N] [--out hyp.tsv] [--reference dev.tsv] [--compare other-hyp.tsv]
                  [--model parakeet.gguf] [--max-seconds S] [--limit N] [--int8-path Avx2|AvxVnni|...] [--threads N]
-                 [--results matrix.tsv]
+                 [--results matrix.tsv] [--cut]
 ```
 
 `--list-gpus` prints every DXGI adapter with its memory, whether it is a software adapter, and
@@ -37,6 +37,7 @@ whether it has enough memory for the engine.
 | `--int8-path` | Forces a slower CPU int8 kernel than the CPU's best, to time older CPUs on a newer one. Only for `--device cpu`. |
 | `--threads` | Overrides the CPU thread budget (by default one thread per fast core the process may run on, at most 8). |
 | `--results` | Appends one summary row per run to a TSV, with a header when the file is new. `Run-Matrix.ps1` uses it. |
+| `--cut` | Cuts clips longer than 20 s at their quietest points, as `SpeechEngine.TranscribeAsync` does (see [Long audio](model-and-decoding.md#long-audio)). Without it, each clip is one model call. Not with `--nemo`. |
 
 What a run does and prints:
 
@@ -56,7 +57,7 @@ What a run does and prints:
 - The word error rate counts words the way the reference corpus's scoring script does: text is
   lower-cased, and anything other than letters and digits separates words.
 - In `--results`, the `corpus` column is the corpus's last two folders, for example `en_us/long60`
-  for `...\en_us\long60\list.txt`, with `<=20s` added when `--max-seconds 20` is set.
+  for `...\en_us\long60\list.txt`, with `<=20s` added when `--max-seconds 20` is set, and ` cut` when `--cut` is.
 
 ## Session memory check
 

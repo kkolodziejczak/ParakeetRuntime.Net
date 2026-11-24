@@ -121,8 +121,33 @@ projects the rows for 251 encoder frames (20 s of audio) once per layer at load.
 `T ≤ 251` frames reads that table from column `251 - T`, the column of position `T - 1`. A longer
 utterance projects its own.
 
-The table also limits the audio length: the longest audio is
-`(rows + 1) / 2 × 8 / 100 - 1` seconds. Longer audio throws `ArgumentException`.
+The table also limits the audio length of one model call: the longest audio is
+`(rows + 1) / 2 × 8 / 100 - 1` seconds. Longer audio throws `ArgumentException`. `SpeechEngine`
+never reaches that limit, because it cuts long audio first (see [Long audio](#long-audio)).
+
+## Long audio
+
+The model drops whole sentences when one call holds long audio made of separate utterances: on
+FLEURS clips joined into files of 60 s and 120 s, English loses 30–45% of its words, in
+ParakeetRuntime and in NVIDIA's PyTorch model alike, with full or local attention. See the
+2026-11-24 long-audio record in [benchmarks.md](benchmarks.md).
+
+`SpeechEngine.TranscribeAsync` therefore cuts (`QuietestPointCutter`):
+
+- Audio of 320,000 samples (20 s) or less is one model call, on the caller's array.
+- Longer audio is measured in 30 ms frames (480 samples), each frame's loudness being its RMS. Each
+  piece ends at the centre of the quietest 300 ms (10 frames) whose centre lies between half and all
+  of the 666 frames that fit in 20 s, counted from the piece's start; on a tie the later centre wins.
+  A piece is therefore 10 to 19.8 s long, and the last piece takes the rest.
+- Every sample belongs to exactly one piece. The pieces' trimmed texts are joined with one space,
+  and empty texts are left out.
+- One call holds the engine for all of its pieces. Its cancellation token is checked before each
+  piece; a piece that has started finishes.
+
+Cutting brings the joined files back to the error rate of single clips (6.0–6.2%). Measured pieces
+of 10, 15, 20, 25 and 30 s gave 6.8, 5.8, 6.0, 6.6 and 7.2% on English `long120`, and cutting at
+every 700 ms pause gave 10.5–13.8% (council `parakeet-consumer-api`, 2026-11-23).
+`parakeet-runtime --corpus … --cut` runs the same cutter, for benchmarks.
 
 ## Decoder
 
