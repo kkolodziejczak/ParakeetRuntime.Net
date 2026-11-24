@@ -135,10 +135,11 @@ ParakeetRuntime and in NVIDIA's PyTorch model alike, with full or local attentio
 `SpeechEngine.TranscribeAsync` therefore cuts (`QuietestPointCutter`):
 
 - Audio of 320,000 samples (20 s) or less is one model call, on the caller's array.
-- Longer audio is measured in 30 ms frames (480 samples), each frame's loudness being its RMS. Each
-  piece ends at the centre of the quietest 300 ms (10 frames) whose centre lies between half and all
-  of the 666 frames that fit in 20 s, counted from the piece's start; on a tie the later centre wins.
-  A piece is therefore 10 to 19.8 s long, and the last piece takes the rest.
+- Longer audio is measured in 30 ms frames (480 samples), each frame's loudness being its RMS. Of
+  the 666 frames that fit in 20 s from the piece's start, each window of 10 frames (300 ms) that lies
+  wholly inside them and is centred at frame 333 or later is a candidate. The piece ends at the
+  centre of the candidate with the lowest summed loudness; on a tie the later centre wins. A piece is
+  therefore 9.99 to 19.83 s long, and the last piece takes the rest.
 - Every sample belongs to exactly one piece. The pieces' trimmed texts are joined with one space,
   and empty texts are left out.
 - One call holds the engine for all of its pieces. Its cancellation token is checked before each
@@ -146,7 +147,9 @@ ParakeetRuntime and in NVIDIA's PyTorch model alike, with full or local attentio
 
 Cutting brings the joined files back to the error rate of single clips (6.0–6.2%). Measured pieces
 of 10, 15, 20, 25 and 30 s gave 6.8, 5.8, 6.0, 6.6 and 7.2% on English `long120`, and cutting at
-every 700 ms pause gave 10.5–13.8% (council `parakeet-consumer-api`, 2026-11-23).
+every 700 ms pause gave 10.5–13.8% on the same files (council `parakeet-consumer-api` prototype,
+2026-11-23: Core Ultra 7 270K Plus with RTX 5070 Ti, `parakeet-tdt-0.6b-v3.q8_0.gguf`, the FLEURS `long60` and
+`long120` files of the 2026-11-24 record).
 `parakeet-runtime --corpus … --cut` runs the same cutter, for benchmarks.
 
 ## Decoder

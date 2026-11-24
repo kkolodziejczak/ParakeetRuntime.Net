@@ -49,6 +49,30 @@ public sealed class LongAudioTests
     }
 
     [Fact]
+    public async Task The_cut_is_at_the_centre_of_the_quietest_300_ms()
+    {
+        var model = new RecordingModel();
+        using var engine = new SpeechEngine(model);
+        var audio = Noise(30 * 16_000);
+        Array.Clear(audio, 467 * 480, 10 * 480);
+
+        await engine.TranscribeAsync(audio);
+
+        Assert.Equal(472 * 480, model.Pieces[0].Length);
+    }
+
+    [Fact]
+    public async Task Silent_audio_is_cut_as_late_as_a_whole_quiet_window_fits_in_20_seconds()
+    {
+        var model = new RecordingModel();
+        using var engine = new SpeechEngine(model);
+
+        await engine.TranscribeAsync(new float[30 * 16_000]);
+
+        Assert.Equal(661 * 480, model.Pieces[0].Length);
+    }
+
+    [Fact]
     public async Task The_texts_of_the_pieces_are_joined_with_one_space_leaving_out_empty_ones()
     {
         var model = new RecordingModel(" Hello.", "", "world. ");
@@ -70,6 +94,24 @@ public sealed class LongAudioTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.TranscribeAsync(Noise(5 * TwentySeconds / 2), cancellation.Token));
 
         Assert.Single(model.Pieces);
+    }
+
+    [Fact]
+    public async Task Cancelling_after_a_piece_that_lost_the_GPU_still_reports_the_CPU()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var model = new RecordingModel { IsUsingGpu = true };
+        model.WhileTranscribing = () =>
+        {
+            model.IsUsingGpu = false;
+            cancellation.Cancel();
+        };
+        using var engine = new SpeechEngine(model);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.TranscribeAsync(Noise(5 * TwentySeconds / 2), cancellation.Token));
+
+        Assert.False(engine.IsUsingGpu);
+        Assert.Equal("CPU", engine.Backend);
     }
 
     [Fact]
@@ -142,6 +184,14 @@ public sealed class LongAudioTests
     }
 
     [Fact]
+    public async Task A_WAV_path_in_a_missing_folder_is_reported_as_not_found()
+    {
+        using var engine = new SpeechEngine(new RecordingModel());
+
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => engine.TranscribeWavAsync(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}", "missing.wav")));
+    }
+
+    [Fact]
     public async Task Audio_that_is_not_WAV_is_rejected_before_anything_is_transcribed()
     {
         var model = new RecordingModel();
@@ -172,8 +222,8 @@ public sealed class LongAudioTests
     {
         public List<float[]> Pieces { get; } = [];
         public Action WhileTranscribing { get; set; } = () => { };
-        public string BackendName => "test";
-        public bool IsUsingGpu => false;
+        public string BackendName => IsUsingGpu ? "GPU: test" : "CPU";
+        public bool IsUsingGpu { get; set; }
 
         public string Transcribe(float[] samples16KhzMono)
         {

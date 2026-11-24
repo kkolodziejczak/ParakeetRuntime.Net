@@ -64,10 +64,15 @@ public sealed class SpeechEngine : IDisposable
         {
             var running = modelUntilDisposed;
             ObjectDisposedException.ThrowIf(running is null, this);
-            var text = await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono, cancellationToken).ConfigureAwait(false);
-            Backend = running.BackendName;
-            IsUsingGpu = running.IsUsingGpu;
-            return text;
+            try
+            {
+                return await RunToCompletionWhileHoldingTheLock(running, samples16KhzMono, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                Backend = running.BackendName;
+                IsUsingGpu = running.IsUsingGpu;
+            }
         }
         finally
         {
@@ -86,6 +91,7 @@ public sealed class SpeechEngine : IDisposable
     /// <param name="cancellationToken">Cancels the wait for an earlier transcription, and stops between pieces of long audio.</param>
     /// <returns>The text, with punctuation and capitals as the model writes them.</returns>
     /// <exception cref="FileNotFoundException">There is no file at the path.</exception>
+    /// <exception cref="DirectoryNotFoundException">The folder in the path does not exist.</exception>
     /// <exception cref="InvalidDataException">The file is not a supported WAV file, is damaged, or holds more than 10 minutes of audio. The message says which.</exception>
     /// <exception cref="ObjectDisposedException">The engine has been disposed.</exception>
     /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
