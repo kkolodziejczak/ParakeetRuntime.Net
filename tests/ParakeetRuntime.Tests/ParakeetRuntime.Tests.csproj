@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ParakeetRuntime\ParakeetRuntime.csproj" />
+    <ProjectReference Include="..\..\src\ParakeetRuntime.Cli\ParakeetRuntime.Cli.csproj" />
   </ItemGroup>
 
 </Project>

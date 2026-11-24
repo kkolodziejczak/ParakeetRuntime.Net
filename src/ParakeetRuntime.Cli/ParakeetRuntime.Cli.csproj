@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ParakeetRuntime\ParakeetRuntime.csproj" />
+    <InternalsVisibleTo Include="ParakeetRuntime.Tests" />
   </ItemGroup>
 
 </Project>

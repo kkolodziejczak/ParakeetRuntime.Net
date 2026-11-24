@@ -1,4 +1,7 @@
 using System.Reflection;
+using System.Text;
+using ParakeetRuntime;
+using ParakeetRuntime.Cli;
 
 var version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 if (args is ["--version"])
@@ -15,14 +18,11 @@ if (args.Contains("--cpu-bench"))
 if (args.Contains("--session-memory"))
     return await SessionMemory.RunAsync(args);
 
-Console.Error.WriteLine($"parakeet-runtime {version}");
-Console.Error.WriteLine("""
-    Usage:
-      parakeet-runtime --version
-      parakeet-runtime --list-gpus
-      parakeet-runtime --corpus <list.txt | wav folder> [options]   speed, word error rate and memory on a list of WAVs
-      parakeet-runtime --cpu-bench [options]                       the CPU encoder's kernels per layer
-      parakeet-runtime --gemm-bench [options]                      the encoder's Q8 matrix multiplications on every GPU
-      parakeet-runtime --session-memory <clip.wav> [options]       whether memory goes back after repeated sessions
-    """);
-return args.Length == 0 ? 0 : 2;
+Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+using var cancellation = new CancellationTokenSource();
+Console.CancelKeyPress += (_, press) =>
+{
+    press.Cancel = !cancellation.IsCancellationRequested;
+    cancellation.Cancel();
+};
+return await ConsoleCommands.RunAsync(args, SpeechModel.Default(), Console.In, Console.Out, Console.Error, cancellation.Token);

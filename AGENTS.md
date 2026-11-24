@@ -8,7 +8,7 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | --- | --- |
 | `ParakeetRuntime.Net.slnx` | The solution. |
 | `src/ParakeetRuntime` | The engine library, packed as the `ParakeetRuntime` NuGet package. Plain `net10.0`, marked Windows-only. |
-| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file, with the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
+| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file: the user commands `transcribe`, `record` and `download` (`ConsoleCommands.cs`), and the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
 | `tests/ParakeetRuntime.Tests` | xUnit tests: kernels, GGUF reading, GPU kernels (skipped without a GPU), and the real model (skipped when it isn't installed). |
 | `scripts/Run-Matrix.ps1` | The full speed matrix against NeMo-Speech.cpp, one run at a time, through `parakeet-runtime.exe --corpus`. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |
@@ -60,6 +60,10 @@ there, because they use the app's audio capture.
   `DOTNET_TieredCompilation=0`. Whether an app's first utterances run Tier0 code is not measured.
 - Intel iGPU load takes 2.3 s instead of 2.0 s since the 64x64 GEMM tile. The cause isn't traced.
 - Next CPU step, which needs the owner's OK: the positions-table walk in the attention scores.
+- Other platforms (decided 2026-11-24: v1 stays Windows-only): the cheap first step is CPU
+  transcription and WAV on Linux x64. `ThreadBudget` calls `GetSystemCpuSetInformation` without an
+  `OperatingSystem.IsWindows()` guard; guard it, drop the assembly's Windows-only mark for that path,
+  and add a Linux CI job. The GPU (Direct3D 12) and microphone (WASAPI) stay Windows-only.
 - Benchmarks: pin 4 P-cores (`--affinity C03` on the owner's Core Ultra 7 270K Plus) and run one at
   a time. The CPU has no AVX-512.
 

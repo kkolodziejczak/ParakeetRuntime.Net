@@ -1,0 +1,164 @@
+using ParakeetRuntime;
+using ParakeetRuntime.Cli;
+
+namespace ParakeetRuntime.Tests;
+
+internal sealed class InstalledModelAndMicrophoneFactAttribute : FactAttribute
+{
+    public InstalledModelAndMicrophoneFactAttribute()
+    {
+        if (!SpeechModel.Default().IsInstalled)
+            Skip = "The speech model is not installed on this machine.";
+        else if (new MicrophoneFactAttribute().Skip is { } noMicrophone)
+            Skip = noMicrophone;
+    }
+}
+
+public sealed class ConsoleCommandsTests : IDisposable
+{
+    private readonly string folder = Path.Combine(Path.GetTempPath(), $"parakeet-cli-{Guid.NewGuid():N}");
+    private readonly StringWriter output = new();
+    private readonly StringWriter errors = new();
+
+    public ConsoleCommandsTests() => Directory.CreateDirectory(folder);
+
+    public void Dispose() => Directory.Delete(folder, recursive: true);
+
+    private SpeechModel MissingModel => new(Path.Combine(folder, "models"), SpeechModel.Parakeet);
+
+    private Task<int> Run(SpeechModel model, string input, params string[] args) =>
+        ConsoleCommands.RunAsync(args, model, new StringReader(input), output, errors, CancellationToken.None);
+
+    [Fact]
+    public async Task Help_lists_every_command_on_standard_output()
+    {
+        var exit = await Run(MissingModel, "", "--help");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("transcribe <file.wav>", output.ToString());
+        Assert.Contains("record", output.ToString());
+        Assert.Contains("download", output.ToString());
+    }
+
+    [Theory]
+    [InlineData("translate")]
+    [InlineData("transcribe")]
+    [InlineData("transcribe", "a.wav", "--device", "tpu")]
+    [InlineData("transcribe", "a.wav", "--colour", "red")]
+    [InlineData("download", "--from")]
+    public async Task A_command_line_that_is_not_understood_shows_the_usage_and_exits_with_2(params string[] args)
+    {
+        var exit = await Run(MissingModel, "", args);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("transcribe <file.wav>", errors.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [Theory]
+    [InlineData("transcribe", "speech.wav")]
+    [InlineData("record")]
+    public async Task Without_the_model_a_command_says_how_to_download_it(params string[] args)
+    {
+        var exit = await Run(MissingModel, "\n", args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("parakeet-runtime download", errors.ToString());
+        Assert.Contains(SpeechModel.Parakeet.Source.ToString(), errors.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [InstalledModelFact]
+    public async Task Transcribing_a_missing_file_names_it_and_exits_with_1()
+    {
+        var missing = Path.Combine(folder, "missing.wav");
+
+        var exit = await Run(SpeechModel.Default(), "", "transcribe", missing, "--device", "cpu");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("missing.wav", errors.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [InstalledModelFact]
+    public async Task Transcribing_a_file_that_is_not_WAV_says_so_and_exits_with_1()
+    {
+        var mp3 = Path.Combine(folder, "song.wav");
+        await File.WriteAllBytesAsync(mp3, "ID3 an mp3 file"u8.ToArray());
+
+        var exit = await Run(SpeechModel.Default(), "", "transcribe", mp3, "--device", "cpu");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("not a WAV file", errors.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [InstalledModelFact]
+    public async Task Transcribe_prints_exactly_what_the_library_returns_for_the_file()
+    {
+        var wav = Path.Combine(folder, "tone.wav");
+        await File.WriteAllBytesAsync(wav, ToneWav(seconds: 2));
+        using var engine = await SpeechEngine.LoadAsync(SpeechModel.Default(), new SpeechEngineOptions(UseGpu: false));
+        var expected = await engine.TranscribeWavAsync(wav);
+
+        var exit = await Run(SpeechModel.Default(), "", "transcribe", wav, "--device", "cpu");
+
+        Assert.Equal(0, exit);
+        Assert.Equal(expected + Environment.NewLine, output.ToString());
+    }
+
+    [InstalledModelFact]
+    public async Task Download_with_the_model_installed_says_so_and_downloads_nothing()
+    {
+        var exit = await Run(SpeechModel.Default(), "", "download");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("already installed", errors.ToString());
+    }
+
+    [Fact]
+    public async Task Download_from_a_file_that_is_not_the_model_installs_nothing_and_exits_with_1()
+    {
+        var notTheModel = Path.Combine(folder, "other.gguf");
+        await File.WriteAllBytesAsync(notTheModel, new byte[1024]);
+        var model = MissingModel;
+
+        var exit = await Run(model, "", "download", "--from", notTheModel);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("does not match", errors.ToString());
+        Assert.False(model.IsInstalled);
+    }
+
+    [InstalledModelFact]
+    public async Task Download_from_a_local_copy_installs_the_model()
+    {
+        var model = MissingModel;
+
+        var exit = await Run(model, "", "download", "--from", SpeechModel.Default().Path);
+
+        Assert.Equal(0, exit);
+        Assert.True(model.IsInstalled);
+        Assert.Contains(model.Path, errors.ToString());
+    }
+
+    [InstalledModelAndMicrophoneFact]
+    public async Task Record_records_until_Enter_and_prints_what_it_heard()
+    {
+        var exit = await Run(SpeechModel.Default(), "\n", "record", "--device", "cpu");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Press Enter", errors.ToString());
+        Assert.EndsWith(Environment.NewLine, output.ToString());
+    }
+
+    private static byte[] ToneWav(int seconds)
+    {
+        var samples = new short[seconds * 16_000];
+        for (var i = 0; i < samples.Length; i++)
+            samples[i] = (short)(8000 * Math.Sin(2 * Math.PI * 440 * i / 16_000.0));
+        var data = new byte[samples.Length * 2];
+        Buffer.BlockCopy(samples, 0, data, 0, data.Length);
+        return [.. WavAudioTests.WavHeader(1, 16, 1, 16_000, (uint)data.Length), .. data];
+    }
+}
