@@ -868,3 +868,24 @@ At 8 kHz the two resamplers' upsampling filters differ, so 5 transcripts differ;
 - The cut rows' transcripts are identical, file for file, to the council prototype's
   `quietest-20` runs (68/68 files); the one-call rows to its `whole-400` runs (68/68).
 - GPU compute for the 1,488 s of English `long60`: 2.18 s in one call per file, 3.01 s cut.
+
+## 2026-11-24 · Long audio on the CPU: one call and cut
+
+- **Machine:** Intel Core Ultra 7 270K Plus, 95 GB RAM; int8 path AvxVnniInt8, 4 threads
+- **Commit:** `4dcb752`
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** the FLEURS `long60` and `long120` files of the 2026-11-24 long-audio record
+- **Command:** `parakeet-runtime --corpus <list.txt> --reference <dev.tsv> --device cpu --affinity C03`,
+  with `--cut` for the cut rows; 1 pass, one run at a time
+
+| Audio | Seconds | One call: WER | One call: RTF | Cut: WER | Cut: RTF |
+| --- | --- | --- | --- | --- | --- |
+| English `long60` | 1487.7 | 30.80% (980/3182) | 0.01893 | 6.19% (197/3182) | 0.01417 |
+| English `long120` | 1526.0 | 42.85% (1394/3253) | 0.02395 | 5.93% (193/3253) | 0.01444 |
+| Polish `long60` | 1423.1 | 8.83% (233/2640) | 0.01962 | 5.91% (156/2640) | 0.01447 |
+| Polish `long120` | 1361.1 | 9.84% (247/2509) | 0.02408 | 6.26% (157/2509) | 0.01478 |
+
+- Cutting helps on the CPU as on the GPU, and the CPU is also 25–40% faster cut, because attention
+  over a 20 s piece costs less than over the whole file.
+- The CPU's cut transcripts differ from the GPU's in 0.34–0.42% of words (identical text in 4–13
+  files per corpus); the int8 CPU path and the GPU's kernels round differently.
