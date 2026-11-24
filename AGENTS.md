@@ -16,7 +16,7 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | `Directory.Build.props` | Shared settings: target framework, version, embedded PDBs, package metadata. |
 
 The library has no Windows SDK projection: the engine reaches Windows only through P/Invoke into
-`d3d12.dll`, `dxgi.dll`, `d3dcompiler_47.dll` and `kernel32.dll`, which every supported Windows
+`d3d12.dll`, `dxgi.dll`, `d3dcompiler_47.dll`, `kernel32.dll` and `ole32.dll`, which every supported Windows
 ships. Keep it that way, so that any `net10.0` application can reference the package.
 
 ## Where the engine came from
@@ -27,7 +27,8 @@ Its measurements are in LocalBuddy PR #3 and in that branch's commit messages. L
 switch to the `ParakeetRuntime` package in its own repository. Its live and replay commands stay
 there, because they use the app's audio capture.
 
-- The public API is `SpeechEngine` and `SpeechModel`; everything else in the engine is internal.
+- The public API is `SpeechEngine`, `SpeechEngineOptions`, `SpeechModel`, `Microphone`,
+  `MicrophoneDevice` and `MicrophoneRecording`; everything else in the engine is internal.
   Design a change to it before making more types public.
 - Keep the shaders as embedded resources and the attribution to NeMo-Speech.cpp. Port more of
   NeMo-Speech.cpp only with an update to [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
@@ -40,6 +41,7 @@ there, because they use the app's audio capture.
 - [docs/cpu-kernels.md](docs/cpu-kernels.md): the int8 CPU paths, quantization, threads and the thread budget.
 - [docs/gpu-path.md](docs/gpu-path.md): the Direct3D 12 host side: adapters, pipelines, buffers, the Q8 GEMM tiles, driver caveats.
 - [docs/gpu-shaders.md](docs/gpu-shaders.md): what every shader entry point computes, its layouts and invariants.
+- [docs/microphone.md](docs/microphone.md): WASAPI capture into memory, its thread, cap, timeouts and errors.
 - [docs/benchmarks-howto.md](docs/benchmarks-howto.md) and [docs/benchmarks.md](docs/benchmarks.md): how to measure, and every measurement so far.
 
 ### Owner's rules for the engine code
