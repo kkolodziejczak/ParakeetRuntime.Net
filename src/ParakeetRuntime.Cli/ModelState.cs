@@ -42,7 +42,7 @@ internal sealed class ModelState(ServerSettings settings, string version) : IAsy
             TryStart("loading", LoadAsync);
     }
 
-    public bool TryStartInstall() => TryStart("downloading", async () =>
+    public bool TryStartInstall() => TryStart(settings.Model.IsInstalled ? "loading" : "downloading", async () =>
     {
         await settings.InstallModel(new ProgressInto(this), stopping.Token);
         await LoadAsync();

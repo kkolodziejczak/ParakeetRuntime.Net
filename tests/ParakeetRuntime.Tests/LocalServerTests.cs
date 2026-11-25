@@ -409,6 +409,23 @@ public sealed class LocalServerTests : IAsyncDisposable
         Assert.Equal("The model file is damaged.", health.RootElement.GetProperty("error").GetString());
     }
 
+    [Fact]
+    public async Task After_a_failed_load_the_pages_request_loads_the_installed_model_again()
+    {
+        await InstallTheModelAsync();
+        var loads = 0;
+        using var client = await StartAsync(load: _ => ++loads == 1
+            ? throw new InvalidDataException("The GPU was reset.")
+            : Task.FromResult(new SpeechEngine(recognizer)));
+        (await WaitForStatusAsync(client, "failed")).Dispose();
+
+        using var again = await client.SendAsync(DownloadRequest(client.BaseAddress!.GetLeftPart(UriPartial.Authority), withHeader: true));
+        using var health = await ReadyHealthAsync(client);
+
+        Assert.Equal(HttpStatusCode.Accepted, again.StatusCode);
+        Assert.Equal(2, loads);
+    }
+
     private static HttpRequestMessage DownloadRequest(string origin, bool withHeader)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/model/download");

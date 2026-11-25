@@ -193,7 +193,7 @@
 
   <div id="error-box" class="box error" role="alert" hidden>
     <span id="error-text"></span>
-    <div><button type="button" class="primary" id="retry-download" hidden>Download model</button></div>
+    <div><button type="button" class="primary" id="retry" hidden>Download model</button></div>
   </div>
 
   <section id="result" class="card" aria-labelledby="result-name" hidden>
@@ -318,7 +318,9 @@
     if (element('error-text').textContent !== text)
       element('error-text').textContent = text;
     element('error-box').hidden = !text;
-    element('retry-download').hidden = !(failed && !health.model.installed);
+    element('retry').hidden = !failed;
+    if (failed)
+      element('retry').textContent = health.model.installed ? 'Load again' : 'Download model';
   }
 
   async function downloadModel() {
@@ -432,7 +434,7 @@
     event.target.value = '';
   });
   element('download').addEventListener('click', downloadModel);
-  element('retry-download').addEventListener('click', downloadModel);
+  element('retry').addEventListener('click', downloadModel);
   element('copy-text').addEventListener('click', event => copy(event.currentTarget, element('transcript').value));
   element('copy-command').addEventListener('click', event => copy(event.currentTarget, element('command').textContent));
 
