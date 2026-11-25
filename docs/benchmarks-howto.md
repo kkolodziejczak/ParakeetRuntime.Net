@@ -108,7 +108,7 @@ powershell -File <changed checkout>\scripts\Run-Matrix.ps1 -Languages pl_pl -Len
 | Parameter | Default | Meaning |
 | --- | --- | --- |
 | `-Nemo` | none | Path to `nemo-speech.exe`. Without it only ParakeetRuntime runs. |
-| `-Corpus` | `%USERPROFILE%\.councils\local-parakeet-engine\fable\corpus` | The corpus root: `<language>\wav16\list.txt` with `<language>\dev.tsv`, and `<language>\<length>\list.txt` with its own `dev.tsv`. |
+| `-Corpus` | `%USERPROFILE%\.councils\local-parakeet-engine\fable\corpus` | The corpus root: `<language>\wav16\list.txt` with `<language>\dev.tsv`, and `<language>\<length>\list.txt` with its own `dev.tsv`. `python scripts/Build-Corpus.py [<root>]` builds it there from FLEURS dev (about 300 MB of downloads): the first 150 clips of each language converted to 16-bit WAV, and `long60` and `long120` files that join those clips with 0.5 s of silence. |
 | `-Out` | `%TEMP%\parakeet-matrix` | Where results, transcripts and logs go. |
 | `-Baseline` | none | An earlier `-Out` folder; each run is compared with the same run's transcript there instead of with NeMo-Speech.cpp on the CPU. |
 | `-Languages` | `pl_pl`, `en_us` | Corpus languages. |
