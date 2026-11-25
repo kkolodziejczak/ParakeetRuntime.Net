@@ -1,0 +1,40 @@
+{
+  "topic": "The consumer interface of ParakeetRuntime: library API for WAV and microphone, the exe with an API and a simple UI, and the README",
+  "members": [
+    {
+      "name": "fable",
+      "provider": "claudeAgent",
+      "model": "claude-fable-5-2"
+    },
+    {
+      "name": "opus",
+      "provider": "claudeAgent",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "name": "sol",
+      "provider": "codex",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "name": "astra",
+      "provider": "codex",
+      "model": "gpt-6.2-astra"
+    },
+    {
+      "name": "neon",
+      "provider": "antigravity",
+      "model": "gemini-4-neon"
+    }
+  ],
+  "sessions": [
+    {
+      "n": 1,
+      "date": "2026-11-23",
+      "input": "initial brief",
+      "leader": "fable",
+      "status": "partly agreed",
+      "result": "result-session-1.md"
+    }
+  ]
+}
