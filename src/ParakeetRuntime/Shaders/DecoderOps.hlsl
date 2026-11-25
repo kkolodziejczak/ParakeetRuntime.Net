@@ -66,6 +66,12 @@ void ZeroBufferMain(uint3 dtid : SV_DispatchThreadID)
         Out0.Store(dtid.x << 2, 0u);
 }
 
+float TanhWithoutOverflow(float x)
+{
+    float e = exp(-2.0f * abs(x));
+    return sign(x) * (1.0f - e) / (1.0f + e);
+}
+
 bool LstmInputIsEmbedding()
 {
     return P2 != 0u;
@@ -176,12 +182,12 @@ void LstmLayerCondMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
             float ig = 1.0f / (1.0f + exp(-iPre));
             float fg = 1.0f / (1.0f + exp(-fPre));
-            float gg = tanh(gPre);
+            float gg = TanhWithoutOverflow(gPre);
             float og = 1.0f / (1.0f + exp(-oPre));
 
             float cPrev = asfloat(Out1.Load(ku << 2));
             float cn = fg * cPrev + ig * gg;
-            float hn = og * tanh(cn);
+            float hn = og * TanhWithoutOverflow(cn);
 
             Out0.Store((dstSlot * H + ku) << 2, asuint(hn));
             Out1.Store(ku << 2, asuint(cn));

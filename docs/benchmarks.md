@@ -940,3 +940,26 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
 - Compared with the 2026-11-23 desktop matrix (Core Ultra 7 270K Plus, RTX 5070 Ti, Intel iGPU, different files):
   the CPU lead is 2.2–3.5× here against 3.9–4.3× there; the GPU leads of 1.9–3.1× there shrink to
   0.69–1.22× on the MX450 and about 1× on the UHD.
+
+## 2026-11-25 · GPU LSTM tanh without overflow
+
+- **Machine, model, audio and command:** as in the laptop matrix above, ParakeetRuntime's two GPUs only
+  (`-LocalDevices gpu:MX450, gpu:Intel`, no NeMo-Speech.cpp), with `-Baseline` set to that matrix's folder;
+  3 passes, best reported
+- **Commit:** the commit that adds this record, on top of `7b26364`; the only engine change is
+  `TanhWithoutOverflow` in `DecoderOps.hlsl`
+
+| | MX450 RTF before → after | Intel UHD RTF before → after | WER before → after (both GPUs) | Same text as before |
+| --- | --- | --- | --- | --- |
+| PL ≤ 20 s | 0.02419 → 0.02278 | 0.09764 → 0.09766 | 6.64% → 6.64% | 150/150 |
+| PL 60 s | 0.02136 → 0.01869 | 0.09304 → 0.09248 | 7.88% → 7.88% | 19/19 |
+| PL 2 min | 0.05128 → 0.04469 | 0.10512 → 0.10784 | 10.29% → 10.29% | 10/10 |
+| EN ≤ 20 s | 0.02592 → 0.02301 | 0.09647 → 0.09748 | 5.97% → 5.97% | 150/150 |
+| EN 60 s | 0.01930 → 0.01827 | 0.09065 → 0.09360 | 36.02% → 22.75% | 20/21 |
+| EN 2 min | 0.04666 → 0.04257 | 0.10375 → 0.10681 | 71.92% → 36.04% | 10/11 |
+
+- Every transcript is unchanged except the two files that looped (`long60_006.wav`, `long120_003.wav`), which
+  now read 120 and 193 words of normal text (NeMo-Speech.cpp: 121 and 209). English GPU WER is now level with
+  NeMo-Speech.cpp on the same device (22.78–22.92% at 60 s, 35.38–35.64% at 2 min).
+- RTF moved by −3% to +13% per row, faster on the MX450 in every row. The before and after runs were hours
+  apart on a laptop, so this spread is not attributed to the change.

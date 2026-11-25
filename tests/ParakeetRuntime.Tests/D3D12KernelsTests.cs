@@ -502,6 +502,42 @@ public sealed unsafe class D3D12KernelsTests
         });
     }
 
+    [GpuFact]
+    public void Gpu_lstm_saturates_instead_of_overflowing_when_cell_or_gate_values_pass_88()
+    {
+        const int h = 64, saturating = 30;
+        var cPrev = new float[h];
+        var bias = new float[4 * h];
+        for (int k = 0; k < h; k++)
+        {
+            float magnitude = 88f + k % 32 * (k < 32 ? 0.4f : 4f);
+            float sign = k % 2 == 0 ? 1f : -1f;
+            bool cellCarriesTheValue = k < 32;
+            bias[k] = cellCarriesTheValue ? -saturating : saturating;
+            bias[h + k] = cellCarriesTheValue ? saturating : -saturating;
+            bias[2 * h + k] = cellCarriesTheValue ? 0f : sign * magnitude;
+            bias[3 * h + k] = saturating;
+            cPrev[k] = cellCarriesTheValue ? sign * magnitude : 0f;
+        }
+        var expectedH = new float[h];
+        for (int k = 0; k < h; k++)
+        {
+            float ig = Kernels.Sigmoid(bias[k]), fg = Kernels.Sigmoid(bias[h + k]), og = Kernels.Sigmoid(bias[3 * h + k]);
+            float c = fg * cPrev[k] + ig * MathF.Tanh(bias[2 * h + k]);
+            expectedH[k] = og * MathF.Tanh(c);
+        }
+
+        GpuTestSupport.ForEachHardwareAdapter(gpu =>
+        {
+            using var probe = new DecoderOpsGpuProbe(gpu);
+            var (actualH, _) = probe.FusedLstmEmbed(new float[4 * h], new float[h], cPrev, new Q8Matrix(4 * h, h), new Q8Matrix(4 * h, h), bias, label: 1, srcSlot: 0u);
+            var wrong = Enumerable.Range(0, h)
+                .Where(k => !float.IsFinite(actualH[k]) || Math.Abs(expectedH[k] - actualH[k]) > 1e-4f)
+                .Select(k => $"unit {k}: input {(k < 32 ? cPrev[k] : bias[2 * h + k])}, expected {expectedH[k]}, got {actualH[k]}");
+            Assert.Empty(wrong);
+        });
+    }
+
     [GpuTheory]
     [InlineData(8000)]
     [InlineData(10)]

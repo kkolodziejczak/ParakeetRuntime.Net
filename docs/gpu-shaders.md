@@ -78,6 +78,11 @@ keeps every thread through the reduction barriers, and only acts when `t < T` (`
   - 128 threads: 32 gate rows (4 gates `i, f, g, o` × 8 hidden units) × 4 lanes along K. A group
     produces 8 hidden units; dispatch `((H + 7) / 8, 1, 1)`. Gate order in weights and bias is
     `i, f, g, o`.
+  - Both `tanh`s (the `g` gate and the new cell state) go through `TanhWithoutOverflow`,
+    `sign(x) * (1 - e) / (1 + e)` with `e = exp(-2|x|)`. The cell state is not bounded and reaches
+    ±88 in real speech, and the compiled HLSL `tanh` overflows `exp` there: it returns 0 at 88 and
+    NaN above about 88.7. One NaN hidden value turns the whole joint prediction into NaN, the fused
+    ReLU turns that into zeros, and the decoder then emits the joint bias's token on every frame.
 - `Q8GemvCondMain`: `Y[N] = X[K] · Wq^T * scale + bias`, one row at a time, with optional gating
   and fused input. 64 threads = 16 output rows × 4 lanes along K; dispatch `((N + 15) / 16, 1, 1)`.
   `P0 = N`, `P1 = K` (at most 1024, a multiple of 32), `P2` = has bias, `P3 = T`, `P4` = mode:
