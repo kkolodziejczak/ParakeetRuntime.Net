@@ -8,8 +8,10 @@ internal static partial class Page
 {
     public static readonly byte[] Html = ReadEmbeddedPage();
 
-    public static readonly string Policy =
-        $"default-src 'none'; script-src '{ScriptHash()}'; style-src 'unsafe-inline'; connect-src 'self'; " +
+    public static readonly string Policy = PolicyFor(Encoding.UTF8.GetString(Html));
+
+    public static string PolicyFor(string html) =>
+        $"default-src 'none'; script-src '{ScriptHash(html)}'; style-src 'unsafe-inline'; connect-src 'self'; " +
         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
     private static byte[] ReadEmbeddedPage()
@@ -20,11 +22,13 @@ internal static partial class Page
         return copy.ToArray();
     }
 
-    private static string ScriptHash()
+    private static string ScriptHash(string html)
     {
-        var script = TheOnlyScript().Match(Encoding.UTF8.GetString(Html)).Groups[1].Value;
-        return $"sha256-{Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(script)))}";
+        var script = TheOnlyScript().Match(html).Groups[1].Value;
+        return $"sha256-{Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(WithNewlinesAsBrowsersReadThem(script))))}";
     }
+
+    private static string WithNewlinesAsBrowsersReadThem(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
 
     [GeneratedRegex("<script>(.*?)</script>", RegexOptions.Singleline)]
     private static partial Regex TheOnlyScript();

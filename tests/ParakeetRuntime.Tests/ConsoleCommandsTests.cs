@@ -14,6 +14,22 @@ internal sealed class InstalledModelAndMicrophoneFactAttribute : FactAttribute
     }
 }
 
+internal sealed class DefaultPortFreeFactAttribute : FactAttribute
+{
+    public DefaultPortFreeFactAttribute()
+    {
+        try
+        {
+            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 5092);
+            probe.Start();
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            Skip = "Port 5092 is in use on this machine.";
+        }
+    }
+}
+
 public sealed class ConsoleCommandsTests : IDisposable
 {
     private readonly string folder = Path.Combine(Path.GetTempPath(), $"parakeet-cli-{Guid.NewGuid():N}");
@@ -51,6 +67,7 @@ public sealed class ConsoleCommandsTests : IDisposable
     [InlineData("transcribe", "")]
     [InlineData("serve", "--port", "http")]
     [InlineData("serve", "--port", "70000")]
+    [InlineData("serve", "--port", "80")]
     [InlineData("download", "--from", " ")]
     public async Task A_command_line_that_is_not_understood_shows_the_usage_and_exits_with_2(params string[] args)
     {
@@ -182,6 +199,7 @@ public sealed class ConsoleCommandsTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains($"http://127.0.0.1:{port}/", errors.ToString());
         Assert.Contains("parakeet-runtime download", errors.ToString());
+        Assert.Empty(openedPages);
     }
 
     [Fact]
@@ -204,13 +222,49 @@ public sealed class ConsoleCommandsTests : IDisposable
         Assert.Empty(openedPages);
     }
 
-    [Fact]
+    [DefaultPortFreeFact]
     public async Task Without_arguments_it_serves_on_port_5092_and_opens_the_page()
     {
         var (_, exit) = await ServeUntilItAnswersAsync(5092, []);
 
         Assert.Equal(0, exit);
         Assert.Equal(["http://127.0.0.1:5092/"], openedPages);
+    }
+
+    [DefaultPortFreeFact]
+    public async Task Without_arguments_an_error_stays_on_screen_until_Enter()
+    {
+        using var taken = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 5092);
+        taken.Start();
+        var input = new ReaderThatAnswersWhenAsked();
+
+        var running = ConsoleCommands.RunAsync([], MissingModel, input, output, errors, openedPages.Add, CancellationToken.None);
+        await input.Asked.WaitAsync(TimeSpan.FromSeconds(15));
+        var stillOpen = !running.IsCompleted;
+        input.Answer();
+        var exit = await running.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.True(stillOpen);
+        Assert.Equal(1, exit);
+        Assert.Contains("Port 5092 is already in use", errors.ToString());
+        Assert.Contains("Press Enter to close", errors.ToString());
+        Assert.Empty(openedPages);
+    }
+
+    private sealed class ReaderThatAnswersWhenAsked : TextReader
+    {
+        private readonly TaskCompletionSource asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string?> answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Asked => asked.Task;
+
+        public void Answer() => answer.TrySetResult("");
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+        {
+            asked.TrySetResult();
+            return new(answer.Task.WaitAsync(cancellationToken));
+        }
     }
 
     private async Task<(System.Net.HttpStatusCode Health, int Exit)> ServeUntilItAnswersAsync(int port, string[] args)

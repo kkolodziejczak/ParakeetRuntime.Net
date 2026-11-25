@@ -83,12 +83,39 @@ public sealed class LocalServerTests : IAsyncDisposable
         using var client = await StartAsync();
 
         using var response = await client.GetAsync("/");
-        var policy = string.Join(";", response.Headers.GetValues("Content-Security-Policy"));
+        var policy = response.Headers.GetValues("Content-Security-Policy").Single().Split(';', StringSplitOptions.TrimEntries)
+            .Select(directive => directive.Split(' ', 2)).ToDictionary(parts => parts[0], parts => parts[1]);
 
-        Assert.Contains("default-src 'none'", policy);
-        Assert.Contains("connect-src 'self'", policy);
-        Assert.Contains("frame-ancestors 'none'", policy);
+        Assert.Equal("'none'", policy["default-src"]);
+        Assert.Equal("'self'", policy["connect-src"]);
+        Assert.Equal("'none'", policy["frame-ancestors"]);
+        Assert.Matches("^'sha256-[A-Za-z0-9+/]{43}='$", policy["script-src"]);
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+    }
+
+    [Fact]
+    public async Task The_policy_allows_the_pages_script_as_a_browser_hashes_it()
+    {
+        using var client = await StartAsync();
+
+        using var response = await client.GetAsync("/");
+        var html = await response.Content.ReadAsStringAsync();
+        var script = System.Text.RegularExpressions.Regex.Match(html, "<script>(.*?)</script>", System.Text.RegularExpressions.RegexOptions.Singleline).Groups[1].Value;
+        var browsersHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(script.Replace("\r\n", "\n").Replace('\r', '\n'))));
+
+        Assert.Contains($"script-src 'sha256-{browsersHash}'", response.Headers.GetValues("Content-Security-Policy").Single());
+    }
+
+    [Theory]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public void A_page_checked_out_with_other_line_endings_still_matches_the_browsers_hash(string newline)
+    {
+        var lfHash = Convert.ToBase64String(SHA256.HashData("let a = 1;\nlet b = 2;\n"u8));
+
+        var policy = Page.PolicyFor($"<p>x</p>{newline}<script>let a = 1;{newline}let b = 2;{newline}</script>");
+
+        Assert.Contains($"script-src 'sha256-{lfHash}'", policy);
     }
 
     [Theory]

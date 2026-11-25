@@ -34,6 +34,7 @@ internal static class ConsoleCommands
     private const int Done = 0, Failed = 1, NotUnderstood = 2;
     private const int DefaultPort = 5092;
     private const string NoBrowser = "--no-browser";
+    private const int BrowsersDropThisPortFromTheHostHeader = 80;
 
     public static bool IsUserCommand(string[] args) => args is [] or ["transcribe" or "record" or "download" or "serve" or "--help" or "-h" or "/?", ..];
 
@@ -44,7 +45,7 @@ internal static class ConsoleCommands
         {
             return args switch
             {
-                [] => await ServeAsync(DefaultPort, new SpeechEngineOptions(), openPage, model, errors, cancellationToken),
+                [] => await KeptOnScreenIfFailedAsync(ServeAsync(DefaultPort, new SpeechEngineOptions(), openPage, model, errors, cancellationToken), input, errors, cancellationToken),
                 ["--help" or "-h" or "/?"] => ShowUsage(output, Done),
                 ["transcribe", var path, .. var rest] when IsPath(path) && DeviceOption(rest) is { } options =>
                     await TranscribeAsync(path, options, model, output, errors, cancellationToken),
@@ -62,6 +63,17 @@ internal static class ConsoleCommands
             errors.WriteLine("Cancelled.");
             return Failed;
         }
+    }
+
+    private static async Task<int> KeptOnScreenIfFailedAsync(Task<int> doubleClickedRun, TextReader input, TextWriter errors, CancellationToken cancellationToken)
+    {
+        var exit = await doubleClickedRun;
+        if (exit == Failed)
+        {
+            errors.WriteLine("Press Enter to close.");
+            await input.ReadLineAsync(cancellationToken);
+        }
+        return exit;
     }
 
     private static bool IsPath(string arg) => !string.IsNullOrWhiteSpace(arg) && !arg.StartsWith("--", StringComparison.Ordinal);
@@ -90,7 +102,8 @@ internal static class ConsoleCommands
         _ => null
     };
 
-    private static bool IsPort(string text, out int port) => int.TryParse(text, out port) && port is > 0 and <= ushort.MaxValue;
+    private static bool IsPort(string text, out int port) =>
+        int.TryParse(text, out port) && port is > 0 and <= ushort.MaxValue && port != BrowsersDropThisPortFromTheHostHeader;
 
     private static async Task<int> ServeAsync(int port, SpeechEngineOptions options, Action<string> openPage, SpeechModel model, TextWriter errors, CancellationToken cancellationToken)
     {

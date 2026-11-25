@@ -188,6 +188,7 @@
     <button type="button" class="secondary" id="choose" disabled>Choose file</button>
     <input type="file" id="file" accept=".wav,audio/wav,audio/x-wav" hidden>
     <p class="hint">WAV, up to 10 minutes · stays on this computer</p>
+    <p class="visually-hidden" id="announcement" role="status"></p>
   </section>
 
   <div id="error-box" class="box error" role="alert" hidden>
@@ -201,7 +202,7 @@
     <textarea id="transcript" readonly placeholder="No speech was recognised."></textarea>
     <div class="result-foot">
       <span id="timing"></span>
-      <button type="button" class="primary" id="copy-text">Copy text</button>
+      <button type="button" class="primary" id="copy-text" data-label="Copy text">Copy text</button>
     </div>
   </section>
 
@@ -209,7 +210,7 @@
     <h2 id="command-title">Use it from the command line</h2>
     <div class="command">
       <code id="command"></code>
-      <button type="button" class="secondary icon" id="copy-command" aria-label="Copy command" title="Copy command">
+      <button type="button" class="secondary icon" id="copy-command" data-label="Copy command" aria-label="Copy command" title="Copy command">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
       </button>
     </div>
@@ -221,22 +222,31 @@
   const notAnswering = 'The server is not answering. Is parakeet-runtime still running?';
   let health = null;
   let transcribing = null;
-  let uploadError = '';
+  let actionError = '';
   let pollTimer = 0;
+  let latestPoll = 0;
 
   element('command').textContent = `curl.exe -F file=@speech.wav ${location.origin}/v1/audio/transcriptions`;
 
   async function refresh() {
     clearTimeout(pollTimer);
+    const poll = ++latestPoll;
+    let reply = null;
     try {
       const response = await fetch('/health', { cache: 'no-store' });
-      health = await response.json();
+      reply = await response.json();
     } catch {
-      health = null;
     }
-    render();
-    if (health?.status !== 'ready')
-      pollTimer = setTimeout(refresh, health?.status === 'downloading' ? 500 : 1500);
+    if (poll !== latestPoll)
+      return;
+    health = reply;
+    if (health && actionError === notAnswering)
+      actionError = '';
+    try {
+      render();
+    } finally {
+      pollTimer = setTimeout(refresh, health?.status === 'downloading' ? 500 : 2000);
+    }
   }
 
   function render() {
@@ -304,45 +314,52 @@
   function renderError(status) {
     const failed = status === 'failed';
     const text = status === 'offline' ? notAnswering
-      : failed ? health.error ?? 'The model could not be loaded.'
-      : status === 'ready' ? uploadError : '';
-    element('error-text').textContent = text;
+      : actionError || (failed ? health.error ?? 'The model could not be loaded.' : '');
+    if (element('error-text').textContent !== text)
+      element('error-text').textContent = text;
     element('error-box').hidden = !text;
     element('retry-download').hidden = !(failed && !health.model.installed);
   }
 
   async function downloadModel() {
-    uploadError = '';
+    actionError = '';
     try {
       const response = await fetch('/model/download', { method: 'POST', headers: { 'X-Parakeet-Request': '1' } });
       if (!response.ok && response.status !== 409)
-        uploadError = await errorMessage(response);
+        actionError = await errorMessage(response);
     } catch {
-      uploadError = notAnswering;
+      actionError = notAnswering;
     }
     refresh();
   }
 
   async function transcribe(file) {
-    if (health?.status !== 'ready' || transcribing)
-      return;
     transcribing = file.name;
-    uploadError = '';
+    actionError = '';
+    element('result').hidden = true;
+    element('announcement').textContent = `Transcribing ${file.name}…`;
     render();
     const form = new FormData();
     form.append('file', file);
     const started = performance.now();
+    let reply = null;
     try {
       const response = await fetch('/v1/audio/transcriptions', { method: 'POST', body: form });
       if (response.ok)
-        showResult(file.name, await response.json(), (performance.now() - started) / 1000);
+        reply = await response.json();
       else
-        uploadError = await errorMessage(response);
+        actionError = await errorMessage(response);
     } catch {
-      uploadError = notAnswering;
+      actionError = notAnswering;
     }
+    const seconds = (performance.now() - started) / 1000;
     transcribing = null;
+    element('announcement').textContent = '';
     render();
+    if (reply)
+      showResult(file.name, reply, seconds);
+    else
+      element('choose').focus();
   }
 
   async function errorMessage(response) {
@@ -358,40 +375,39 @@
     element('transcript').value = reply.text;
     element('timing').textContent = `Audio ${reply.duration.toFixed(1)} s · transcribed in ${seconds.toFixed(1)} s`;
     element('result').hidden = false;
+    element('transcript').focus();
   }
 
   function takeFiles(files) {
+    if (health?.status !== 'ready' || transcribing || files.length === 0)
+      return;
     if (files.length === 1) {
       transcribe(files[0]);
       return;
     }
-    if (files.length > 1) {
-      uploadError = 'Drop one WAV file at a time.';
-      render();
-    }
+    actionError = 'Drop one WAV file at a time.';
+    render();
   }
 
   async function copy(button, text) {
-    const label = button.getAttribute('aria-label');
-    const original = label ?? button.textContent;
     let done = 'Copied';
     try {
       await navigator.clipboard.writeText(text);
     } catch {
       done = 'Select it and press Ctrl+C';
     }
-    if (label)
-      button.setAttribute('aria-label', done);
-    else
-      button.textContent = done;
-    button.title = done;
-    setTimeout(() => {
-      if (label)
-        button.setAttribute('aria-label', original);
-      else
-        button.textContent = original;
-      button.title = label ? original : '';
-    }, 1500);
+    showLabel(button, done);
+    clearTimeout(button.restoreTimer);
+    button.restoreTimer = setTimeout(() => showLabel(button, button.dataset.label), 1500);
+  }
+
+  function showLabel(button, text) {
+    if (button.classList.contains('icon')) {
+      button.setAttribute('aria-label', text);
+      button.title = text;
+    } else {
+      button.textContent = text;
+    }
   }
 
   const drop = element('drop');
