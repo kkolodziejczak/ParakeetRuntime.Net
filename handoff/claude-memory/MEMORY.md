@@ -1,2 +1,0 @@
-- [Consumer API plan](consumer-api-plan.md) — 10-step plan from the council, owner's overrides (10 min WAV, Windows-only v1)
-- [Manual acceptance at the end](manual-acceptance-at-the-end.md) — no mid-way manual tests; one checklist session before NuGet sign-off
