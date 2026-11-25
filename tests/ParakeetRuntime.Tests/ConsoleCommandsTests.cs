@@ -19,6 +19,7 @@ public sealed class ConsoleCommandsTests : IDisposable
     private readonly string folder = Path.Combine(Path.GetTempPath(), $"parakeet-cli-{Guid.NewGuid():N}");
     private readonly StringWriter output = new();
     private readonly StringWriter errors = new();
+    private readonly List<string> openedPages = [];
 
     public ConsoleCommandsTests() => Directory.CreateDirectory(folder);
 
@@ -27,7 +28,7 @@ public sealed class ConsoleCommandsTests : IDisposable
     private SpeechModel MissingModel => new(Path.Combine(folder, "models"), SpeechModel.Parakeet);
 
     private Task<int> Run(SpeechModel model, string input, params string[] args) =>
-        ConsoleCommands.RunAsync(args, model, new StringReader(input), output, errors, CancellationToken.None);
+        ConsoleCommands.RunAsync(args, model, new StringReader(input), output, errors, openedPages.Add, CancellationToken.None);
 
     [Fact]
     public async Task Help_lists_every_command_on_standard_output()
@@ -38,6 +39,7 @@ public sealed class ConsoleCommandsTests : IDisposable
         Assert.Contains("transcribe <file.wav>", output.ToString());
         Assert.Contains("record", output.ToString());
         Assert.Contains("download", output.ToString());
+        Assert.Contains("--no-browser", output.ToString());
     }
 
     [Theory]
@@ -161,7 +163,7 @@ public sealed class ConsoleCommandsTests : IDisposable
     {
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
-        var exit = await ConsoleCommands.RunAsync(["record", "--device", "cpu"], SpeechModel.Default(), new ReaderThatNeverAnswers(), output, errors, cancellation.Token)
+        var exit = await ConsoleCommands.RunAsync(["record", "--device", "cpu"], SpeechModel.Default(), new ReaderThatNeverAnswers(), output, errors, openedPages.Add, cancellation.Token)
             .WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.Equal(1, exit);
@@ -173,18 +175,52 @@ public sealed class ConsoleCommandsTests : IDisposable
     public async Task Serve_answers_on_its_port_until_cancelled_and_says_how_to_get_the_model()
     {
         var port = FreePort();
-        using var stop = new CancellationTokenSource();
-        var serving = ConsoleCommands.RunAsync(["serve", "--port", port.ToString(), "--device", "cpu"], MissingModel, new StringReader(""), output, errors, stop.Token);
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
 
-        var health = await HealthWhenUpAsync(client);
-        await stop.CancelAsync();
-        var exit = await serving.WaitAsync(TimeSpan.FromSeconds(15));
+        var (health, exit) = await ServeUntilItAnswersAsync(port, ["serve", "--port", port.ToString(), "--device", "cpu", "--no-browser"]);
 
         Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, health);
         Assert.Equal(0, exit);
         Assert.Contains($"http://127.0.0.1:{port}/", errors.ToString());
         Assert.Contains("parakeet-runtime download", errors.ToString());
+    }
+
+    [Fact]
+    public async Task Serve_opens_its_page_in_the_browser()
+    {
+        var port = FreePort();
+
+        await ServeUntilItAnswersAsync(port, ["serve", "--device", "cpu", "--port", port.ToString()]);
+
+        Assert.Equal([$"http://127.0.0.1:{port}/"], openedPages);
+    }
+
+    [Fact]
+    public async Task Serve_with_no_browser_opens_nothing()
+    {
+        var port = FreePort();
+
+        await ServeUntilItAnswersAsync(port, ["serve", "--no-browser", "--port", port.ToString()]);
+
+        Assert.Empty(openedPages);
+    }
+
+    [Fact]
+    public async Task Without_arguments_it_serves_on_port_5092_and_opens_the_page()
+    {
+        var (_, exit) = await ServeUntilItAnswersAsync(5092, []);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["http://127.0.0.1:5092/"], openedPages);
+    }
+
+    private async Task<(System.Net.HttpStatusCode Health, int Exit)> ServeUntilItAnswersAsync(int port, string[] args)
+    {
+        using var stop = new CancellationTokenSource();
+        var serving = ConsoleCommands.RunAsync(args, MissingModel, new StringReader(""), output, errors, openedPages.Add, stop.Token);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+        var health = await HealthWhenUpAsync(client);
+        await stop.CancelAsync();
+        return (health, await serving.WaitAsync(TimeSpan.FromSeconds(15)));
     }
 
     [Fact]

@@ -45,6 +45,7 @@ internal sealed class LocalServer : IAsyncDisposable
         builder.Services.AddRoutingCore();
         app = builder.Build();
         app.Use(RefuseOtherHostsAndPages);
+        app.MapGet("/", PageAsync);
         app.MapGet("/health", HealthAsync);
         app.MapPost("/model/download", DownloadAsync);
         app.MapPost("/v1/audio/transcriptions", TranscribeAsync);
@@ -91,6 +92,17 @@ internal sealed class LocalServer : IAsyncDisposable
 
     private static bool AbsentOrExactly(HttpRequest request, string header, string allowed) =>
         !request.Headers.TryGetValue(header, out var values) || values == allowed;
+
+    private static async Task PageAsync(HttpContext context)
+    {
+        var headers = context.Response.Headers;
+        headers.ContentType = "text/html; charset=utf-8";
+        headers.ContentSecurityPolicy = Page.Policy;
+        headers.XContentTypeOptions = "nosniff";
+        headers.CacheControl = "no-store";
+        headers["Referrer-Policy"] = "no-referrer";
+        await context.Response.Body.WriteAsync(Page.Html, context.RequestAborted);
+    }
 
     private async Task HealthAsync(HttpContext context)
     {

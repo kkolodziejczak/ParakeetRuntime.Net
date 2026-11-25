@@ -13,7 +13,7 @@ internal sealed record ServerSettings(
     public TimeSpan UploadDeadline { get; init; } = TimeSpan.FromMinutes(1);
 }
 
-internal sealed record ModelSource(string Source, long Bytes, string Folder);
+internal sealed record ModelSource(string Source, long Bytes, string Folder, bool Installed);
 
 internal sealed record HealthReply(string Status, double Progress, string Version, string? Backend, ModelSource Model, string? Error);
 
@@ -31,9 +31,9 @@ internal sealed class ModelState(ServerSettings settings, string version) : IAsy
 
     public HealthReply Snapshot()
     {
+        var model = new ModelSource(settings.Model.Pinned.Source.ToString(), settings.Model.Pinned.Bytes, settings.Model.Folder, settings.Model.IsInstalled);
         lock (gate)
-            return new HealthReply(status, Math.Round(progress, 3), version, engine?.Backend,
-                new ModelSource(settings.Model.Pinned.Source.ToString(), settings.Model.Pinned.Bytes, settings.Model.Folder), error);
+            return new HealthReply(status, Math.Round(progress, 3), version, engine?.Backend, model, error);
     }
 
     public void LoadIfInstalled()

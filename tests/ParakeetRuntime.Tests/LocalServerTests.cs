@@ -47,6 +47,7 @@ public sealed class LocalServerTests : IAsyncDisposable
         Assert.Equal(TinyModel.Source.ToString(), health.RootElement.GetProperty("model").GetProperty("source").GetString());
         Assert.Equal(ModelBytes.Length, health.RootElement.GetProperty("model").GetProperty("bytes").GetInt64());
         Assert.Equal(@"C:\models", health.RootElement.GetProperty("model").GetProperty("folder").GetString());
+        Assert.False(health.RootElement.GetProperty("model").GetProperty("installed").GetBoolean());
     }
 
     [Fact]
@@ -58,6 +59,50 @@ public sealed class LocalServerTests : IAsyncDisposable
         using var health = await ReadyHealthAsync(client);
 
         Assert.Equal("CPU (test)", health.RootElement.GetProperty("backend").GetString());
+        Assert.True(health.RootElement.GetProperty("model").GetProperty("installed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task The_page_is_one_HTML_file_at_the_root_that_loads_nothing_from_elsewhere()
+    {
+        using var client = await StartAsync();
+
+        using var response = await client.GetAsync("/");
+        var html = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType?.CharSet);
+        Assert.Contains("<title>Parakeet Runtime</title>", html);
+        Assert.DoesNotMatch("""(src|href|url)\s*[=(]\s*["']?(https?:)?//""", html);
+    }
+
+    [Fact]
+    public async Task The_page_may_not_be_framed_or_reach_other_servers()
+    {
+        using var client = await StartAsync();
+
+        using var response = await client.GetAsync("/");
+        var policy = string.Join(";", response.Headers.GetValues("Content-Security-Policy"));
+
+        Assert.Contains("default-src 'none'", policy);
+        Assert.Contains("connect-src 'self'", policy);
+        Assert.Contains("frame-ancestors 'none'", policy);
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+    }
+
+    [Theory]
+    [InlineData("'/health'")]
+    [InlineData("'/model/download'")]
+    [InlineData("'/v1/audio/transcriptions'")]
+    [InlineData("'X-Parakeet-Request': '1'")]
+    public async Task The_page_calls_the_servers_own_routes(string call)
+    {
+        using var client = await StartAsync();
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains(call, html);
     }
 
     [Fact]

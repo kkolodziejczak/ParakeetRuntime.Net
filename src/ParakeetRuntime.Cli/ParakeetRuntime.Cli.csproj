@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Page.html" LogicalName="ParakeetRuntime.Cli.Page.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ParakeetRuntime\ParakeetRuntime.csproj" />
     <InternalsVisibleTo Include="ParakeetRuntime.Tests" />
   </ItemGroup>

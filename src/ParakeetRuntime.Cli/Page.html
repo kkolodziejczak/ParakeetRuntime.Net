@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parakeet Runtime</title>
+<style>
+  :root {
+    --page: #f3f5f8;
+    --card: #ffffff;
+    --line: #d5dae1;
+    --text: #16191d;
+    --quiet: #545c66;
+    --blue: #0b5fcc;
+    --blue-hover: #094fa9;
+    --focus: #0b5fcc;
+    --ready-bg: #e2f5e7;
+    --ready-text: #13622b;
+    --wait-bg: #e9ecf0;
+    --wait-text: #3f4650;
+    --note-bg: #fdf3d3;
+    --note-line: #efd98d;
+    --note-text: #5c4200;
+    --error-bg: #fdeceb;
+    --error-line: #efa9a4;
+    --error-text: #a3221a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font: 16px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  main {
+    max-width: 720px;
+    margin: 32px auto;
+    padding: 28px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 12px;
+    margin-bottom: 4px;
+  }
+  h1 { margin: 0; font-size: 26px; font-weight: 650; }
+  #version { color: var(--quiet); }
+  #status {
+    margin-left: auto;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--wait-bg);
+    color: var(--wait-text);
+  }
+  #status[data-tone="ready"] { background: var(--ready-bg); color: var(--ready-text); }
+  #status[data-tone="note"] { background: var(--note-bg); color: var(--note-text); }
+  #status[data-tone="error"] { background: var(--error-bg); color: var(--error-text); }
+  #status b { font-weight: 650; }
+  section, .box { margin-top: 16px; }
+  .box {
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid;
+  }
+  .box p { margin: 4px 0 0; overflow-wrap: anywhere; }
+  .box .title { margin: 0; font-weight: 650; }
+  .note { background: var(--note-bg); border-color: var(--note-line); color: var(--note-text); }
+  .error { background: var(--error-bg); border-color: var(--error-line); color: var(--error-text); }
+  .bar {
+    height: 12px;
+    margin-top: 12px;
+    border-radius: 6px;
+    background: var(--wait-bg);
+    overflow: hidden;
+  }
+  .bar div { height: 100%; width: 0; background: var(--blue); transition: width .3s; }
+  #drop {
+    padding: 36px 20px;
+    border: 2px dashed var(--line);
+    border-radius: 12px;
+    text-align: center;
+  }
+  #drop.over { border-color: var(--blue); background: #eef4fd; }
+  #drop[aria-disabled="true"] { background: #f6f7f9; color: var(--quiet); }
+  #drop h2 { margin: 0 0 16px; font-size: 24px; font-weight: 600; overflow-wrap: anywhere; }
+  #drop .hint { margin: 14px 0 0; color: var(--quiet); }
+  button {
+    font: inherit;
+    border-radius: 8px;
+    padding: 8px 20px;
+    cursor: pointer;
+  }
+  button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  button:disabled { cursor: not-allowed; }
+  .primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+  .primary:hover:not(:disabled) { background: var(--blue-hover); }
+  .secondary { background: var(--card); color: var(--text); border: 1px solid #6b7480; }
+  .secondary:hover:not(:disabled) { background: #f0f2f5; }
+  button:disabled.secondary { color: #59616c; border-color: var(--line); background: #eceef1; }
+  .box .primary { margin-top: 12px; }
+  .card {
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fafbfc;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 20px; font-weight: 650; overflow-wrap: anywhere; }
+  textarea {
+    display: block;
+    width: 100%;
+    min-height: 120px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font: inherit;
+    resize: vertical;
+  }
+  textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+  .result-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  #timing { color: var(--quiet); }
+  .command {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+  }
+  code {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font: 14px/1.6 Consolas, "Cascadia Mono", monospace;
+  }
+  .icon { padding: 6px 10px; line-height: 0; }
+  .icon svg { width: 18px; height: 18px; }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  @media (max-width: 600px) {
+    main { margin: 0; padding: 20px 16px; border: 0; border-radius: 0; min-height: 100vh; }
+    #status { margin-left: 0; }
+    #drop { padding: 28px 16px; }
+    #drop h2 { font-size: 21px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parakeet Runtime</h1>
+    <span id="version"></span>
+    <span id="status" role="status">Connecting…</span>
+  </header>
+
+  <div id="model-box" class="box note" hidden>
+    <p class="title" id="model-title"></p>
+    <div id="model-missing">
+      <p id="model-source"></p>
+      <p id="model-folder"></p>
+      <button type="button" class="primary" id="download">Download model</button>
+    </div>
+    <div class="bar" id="model-bar" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" hidden><div></div></div>
+  </div>
+
+  <section id="drop" aria-labelledby="drop-title" aria-disabled="true">
+    <h2 id="drop-title">Drop a WAV file here</h2>
+    <button type="button" class="secondary" id="choose" disabled>Choose file</button>
+    <input type="file" id="file" accept=".wav,audio/wav,audio/x-wav" hidden>
+    <p class="hint">WAV, up to 10 minutes · stays on this computer</p>
+  </section>
+
+  <div id="error-box" class="box error" role="alert" hidden>
+    <span id="error-text"></span>
+    <div><button type="button" class="primary" id="retry-download" hidden>Download model</button></div>
+  </div>
+
+  <section id="result" class="card" aria-labelledby="result-name" hidden>
+    <h2 id="result-name"></h2>
+    <label class="visually-hidden" for="transcript">Transcript</label>
+    <textarea id="transcript" readonly placeholder="No speech was recognised."></textarea>
+    <div class="result-foot">
+      <span id="timing"></span>
+      <button type="button" class="primary" id="copy-text">Copy text</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="command-title">
+    <h2 id="command-title">Use it from the command line</h2>
+    <div class="command">
+      <code id="command"></code>
+      <button type="button" class="secondary icon" id="copy-command" aria-label="Copy command" title="Copy command">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+      </button>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const element = id => document.getElementById(id);
+  const notAnswering = 'The server is not answering. Is parakeet-runtime still running?';
+  let health = null;
+  let transcribing = null;
+  let uploadError = '';
+  let pollTimer = 0;
+
+  element('command').textContent = `curl.exe -F file=@speech.wav ${location.origin}/v1/audio/transcriptions`;
+
+  async function refresh() {
+    clearTimeout(pollTimer);
+    try {
+      const response = await fetch('/health', { cache: 'no-store' });
+      health = await response.json();
+    } catch {
+      health = null;
+    }
+    render();
+    if (health?.status !== 'ready')
+      pollTimer = setTimeout(refresh, health?.status === 'downloading' ? 500 : 1500);
+  }
+
+  function render() {
+    const status = health?.status ?? 'offline';
+    const ready = status === 'ready';
+    element('version').textContent = health ? health.version.split('+')[0] : '';
+    renderStatus(status);
+    renderModelBox(status);
+    renderDropZone(ready);
+    renderError(status);
+  }
+
+  function renderStatus(status) {
+    const pill = element('status');
+    const [tone, label] = {
+      'ready': ['ready', 'Ready'],
+      'loading': ['wait', 'Loading model…'],
+      'downloading': ['note', 'Downloading model…'],
+      'no-model': ['note', 'No model'],
+      'failed': ['error', 'Failed'],
+      'offline': ['error', 'Not answering'],
+    }[status];
+    const detail = status === 'ready' ? ` · ${health.backend}` : '';
+    if (pill.textContent === label + detail)
+      return;
+    pill.dataset.tone = tone;
+    const bold = document.createElement('b');
+    bold.textContent = label;
+    pill.replaceChildren(bold, detail);
+  }
+
+  function renderModelBox(status) {
+    const missing = status === 'no-model';
+    const downloading = status === 'downloading';
+    element('model-box').hidden = !(missing || downloading);
+    element('model-missing').hidden = !missing;
+    element('model-bar').hidden = !downloading;
+    if (missing) {
+      const source = new URL(health.model.source);
+      const repository = source.pathname.split('/').slice(1, 3).join('/');
+      element('model-title').textContent = 'The speech model is not installed';
+      element('model-source').textContent = `${megabytes(health.model.bytes)} from ${source.host} (${repository})`;
+      element('model-folder').textContent = `Saved to ${health.model.folder}`;
+    }
+    if (downloading) {
+      const percent = Math.floor(health.progress * 100);
+      element('model-title').textContent = `Downloading the speech model… ${percent}%`;
+      element('model-bar').setAttribute('aria-valuenow', percent);
+      element('model-bar').firstElementChild.style.width = `${percent}%`;
+    }
+  }
+
+  function megabytes(bytes) {
+    return `${Math.round(bytes / 1e6)} MB`;
+  }
+
+  function renderDropZone(ready) {
+    const usable = ready && !transcribing;
+    element('drop').setAttribute('aria-disabled', String(!usable));
+    element('drop').setAttribute('aria-busy', String(Boolean(transcribing)));
+    element('choose').disabled = !usable;
+    element('drop-title').textContent = transcribing ? `Transcribing ${transcribing}…` : 'Drop a WAV file here';
+  }
+
+  function renderError(status) {
+    const failed = status === 'failed';
+    const text = status === 'offline' ? notAnswering
+      : failed ? health.error ?? 'The model could not be loaded.'
+      : status === 'ready' ? uploadError : '';
+    element('error-text').textContent = text;
+    element('error-box').hidden = !text;
+    element('retry-download').hidden = !(failed && !health.model.installed);
+  }
+
+  async function downloadModel() {
+    uploadError = '';
+    try {
+      const response = await fetch('/model/download', { method: 'POST', headers: { 'X-Parakeet-Request': '1' } });
+      if (!response.ok && response.status !== 409)
+        uploadError = await errorMessage(response);
+    } catch {
+      uploadError = notAnswering;
+    }
+    refresh();
+  }
+
+  async function transcribe(file) {
+    if (health?.status !== 'ready' || transcribing)
+      return;
+    transcribing = file.name;
+    uploadError = '';
+    render();
+    const form = new FormData();
+    form.append('file', file);
+    const started = performance.now();
+    try {
+      const response = await fetch('/v1/audio/transcriptions', { method: 'POST', body: form });
+      if (response.ok)
+        showResult(file.name, await response.json(), (performance.now() - started) / 1000);
+      else
+        uploadError = await errorMessage(response);
+    } catch {
+      uploadError = notAnswering;
+    }
+    transcribing = null;
+    render();
+  }
+
+  async function errorMessage(response) {
+    try {
+      return (await response.json()).error.message;
+    } catch {
+      return `The server answered ${response.status}.`;
+    }
+  }
+
+  function showResult(name, reply, seconds) {
+    element('result-name').textContent = name;
+    element('transcript').value = reply.text;
+    element('timing').textContent = `Audio ${reply.duration.toFixed(1)} s · transcribed in ${seconds.toFixed(1)} s`;
+    element('result').hidden = false;
+  }
+
+  function takeFiles(files) {
+    if (files.length === 1) {
+      transcribe(files[0]);
+      return;
+    }
+    if (files.length > 1) {
+      uploadError = 'Drop one WAV file at a time.';
+      render();
+    }
+  }
+
+  async function copy(button, text) {
+    const label = button.getAttribute('aria-label');
+    const original = label ?? button.textContent;
+    let done = 'Copied';
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      done = 'Select it and press Ctrl+C';
+    }
+    if (label)
+      button.setAttribute('aria-label', done);
+    else
+      button.textContent = done;
+    button.title = done;
+    setTimeout(() => {
+      if (label)
+        button.setAttribute('aria-label', original);
+      else
+        button.textContent = original;
+      button.title = label ? original : '';
+    }, 1500);
+  }
+
+  const drop = element('drop');
+  drop.addEventListener('dragover', event => {
+    event.preventDefault();
+    const usable = drop.getAttribute('aria-disabled') === 'false';
+    event.dataTransfer.dropEffect = usable ? 'copy' : 'none';
+    drop.classList.toggle('over', usable);
+  });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', event => {
+    event.preventDefault();
+    drop.classList.remove('over');
+    takeFiles(event.dataTransfer.files);
+  });
+  window.addEventListener('dragover', event => event.preventDefault());
+  window.addEventListener('drop', event => event.preventDefault());
+
+  element('choose').addEventListener('click', () => element('file').click());
+  element('file').addEventListener('change', event => {
+    takeFiles(event.target.files);
+    event.target.value = '';
+  });
+  element('download').addEventListener('click', downloadModel);
+  element('retry-download').addEventListener('click', downloadModel);
+  element('copy-text').addEventListener('click', event => copy(event.currentTarget, element('transcript').value));
+  element('copy-command').addEventListener('click', event => copy(event.currentTarget, element('command').textContent));
+
+  refresh();
+})();
+</script>
+</body>
+</html>

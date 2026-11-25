@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using ParakeetRuntime;
@@ -31,9 +33,21 @@ Console.CancelKeyPress += (_, press) =>
 };
 try
 {
-    return await ConsoleCommands.RunAsync(args, SpeechModel.Default(), Console.In, Console.Out, Console.Error, cancellation.Token);
+    return await ConsoleCommands.RunAsync(args, SpeechModel.Default(), Console.In, Console.Out, Console.Error, OpenInBrowser, cancellation.Token);
 }
 finally
 {
     Console.OutputEncoding = consoleEncoding;
+}
+
+static void OpenInBrowser(string url)
+{
+    try
+    {
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+    }
+    catch (Win32Exception)
+    {
+        Console.Error.WriteLine($"Open {url} in your browser.");
+    }
 }

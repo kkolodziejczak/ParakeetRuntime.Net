@@ -6,16 +6,19 @@ internal static class ConsoleCommands
 {
     public const string Usage = """
         Usage:
+          parakeet-runtime                                                       the same as serve: opens the page in the browser
           parakeet-runtime transcribe <file.wav> [--device cpu|gpu|gpu:<name>]   prints the text of a WAV file
           parakeet-runtime record [--device cpu|gpu|gpu:<name>]                  records the default microphone until Enter, prints the text
           parakeet-runtime download [--from <file.gguf>]                         installs the speech model (714 MB), or from a local copy
-          parakeet-runtime serve [--port 5092] [--device cpu|gpu|gpu:<name>]    serves the HTTP API on 127.0.0.1 until Ctrl+C
+          parakeet-runtime serve [--port 5092] [--device cpu|gpu|gpu:<name>] [--no-browser]
+                                                                                 serves the page and the HTTP API on 127.0.0.1 until Ctrl+C
           parakeet-runtime --help | --version
 
         The text goes to standard output; messages go to standard error. --device defaults to a GPU
         when one is usable, else the CPU.
 
         HTTP API of serve:
+          GET  /                          the page: drop a WAV, read its text.
           POST /v1/audio/transcriptions   multipart/form-data with one 'file' part (a WAV); optional
                                           response_format=text. Answers {"text": ..., "duration": seconds}.
           GET  /health                    the model's status: no-model, downloading, loading, ready or failed.
@@ -30,24 +33,27 @@ internal static class ConsoleCommands
 
     private const int Done = 0, Failed = 1, NotUnderstood = 2;
     private const int DefaultPort = 5092;
+    private const string NoBrowser = "--no-browser";
 
     public static bool IsUserCommand(string[] args) => args is [] or ["transcribe" or "record" or "download" or "serve" or "--help" or "-h" or "/?", ..];
 
-    public static async Task<int> RunAsync(string[] args, SpeechModel model, TextReader input, TextWriter output, TextWriter errors, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(string[] args, SpeechModel model, TextReader input, TextWriter output, TextWriter errors,
+        Action<string> openPage, CancellationToken cancellationToken)
     {
         try
         {
             return args switch
             {
-                [] or ["--help" or "-h" or "/?"] => ShowUsage(output, Done),
+                [] => await ServeAsync(DefaultPort, new SpeechEngineOptions(), openPage, model, errors, cancellationToken),
+                ["--help" or "-h" or "/?"] => ShowUsage(output, Done),
                 ["transcribe", var path, .. var rest] when IsPath(path) && DeviceOption(rest) is { } options =>
                     await TranscribeAsync(path, options, model, output, errors, cancellationToken),
                 ["record", .. var rest] when DeviceOption(rest) is { } options =>
                     await RecordAsync(options, model, input, output, errors, cancellationToken),
                 ["download"] => await DownloadAsync(from: null, model, errors, cancellationToken),
                 ["download", "--from", var from] when IsPath(from) => await DownloadAsync(from, model, errors, cancellationToken),
-                ["serve", .. var rest] when ServeOptions(rest) is var (port, options) =>
-                    await ServeAsync(port, options, model, errors, cancellationToken),
+                ["serve", .. var rest] when ServeOptions(rest.Where(arg => arg != NoBrowser).ToArray()) is var (port, options) =>
+                    await ServeAsync(port, options, rest.Contains(NoBrowser) ? _ => { } : openPage, model, errors, cancellationToken),
                 _ => ShowUsage(errors, NotUnderstood)
             };
         }
@@ -86,7 +92,7 @@ internal static class ConsoleCommands
 
     private static bool IsPort(string text, out int port) => int.TryParse(text, out port) && port is > 0 and <= ushort.MaxValue;
 
-    private static async Task<int> ServeAsync(int port, SpeechEngineOptions options, SpeechModel model, TextWriter errors, CancellationToken cancellationToken)
+    private static async Task<int> ServeAsync(int port, SpeechEngineOptions options, Action<string> openPage, SpeechModel model, TextWriter errors, CancellationToken cancellationToken)
     {
         var settings = new ServerSettings(port, model,
             loading => SpeechEngine.LoadAsync(model, options, loading),
@@ -98,6 +104,7 @@ internal static class ConsoleCommands
             errors.WriteLine($"  curl.exe -F file=@speech.wav {server.Origin}/v1/audio/transcriptions");
             if (!model.IsInstalled)
                 ModelMissing(model, errors);
+            openPage($"{server.Origin}/");
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return Done;
         }
