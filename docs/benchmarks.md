@@ -889,3 +889,54 @@ At 8 kHz the two resamplers' upsampling filters differ, so 5 transcripts differ;
   over a 20 s piece costs less than over the whole file.
 - The CPU's cut transcripts differ from the GPU's in 0.34–0.42% of words (identical text in 4–13
   files per corpus); the int8 CPU path and the GPU's kernels round differently.
+
+## 2026-11-25 · Matrix against NeMo-Speech.cpp on a laptop (i7-11850H, MX450, UHD)
+
+- **Machine:** Intel Core i7-11850H (8 cores, 16 threads, AVX-512), 32 GB RAM, on mains power; NVIDIA GeForce
+  MX450 2 GB (driver 596.71) and Intel UHD Graphics (driver 32.0.101.7088)
+- **Commit:** `1078f4e` for `wav16`, `9ab9a2f` for `long60`, `ec70723` for `long120`; the engine is the same in all
+  three (only the exe's page changed)
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf` for both engines; NeMo-Speech.cpp v0.3.0, Windows x86_64 Vulkan release
+- **Audio:** rebuilt on this machine from FLEURS dev: the first 150 rows of each language's `dev.tsv`, float WAV
+  converted to 16-bit; `long60` and `long120` join those clips in order with 0.5 s of silence until a file
+  reaches 60 or 120 s (English 21 and 11 files, Polish 19 and 10). Not the same files as the desktop's corpus,
+  so compare these rows only with each other.
+- **Command:** `scripts/Run-Matrix.ps1` with `-Affinity 5500` (4 physical cores, no SMT siblings),
+  `-LocalDevices gpu:MX450, gpu:Intel, cpu`, `-NemoDevices vulkan:0, vulkan:1`; 3 passes, best reported; whole
+  files in one call (no `--cut`)
+
+ParakeetRuntime RTF, and in brackets NeMo-Speech.cpp RTF ÷ ParakeetRuntime RTF on the same device:
+
+| | CPU | MX450 | Intel UHD |
+| --- | --- | --- | --- |
+| EN ≤ 20 s | 0.05951 (3.42×) | 0.02592 (1.13×) | 0.09647 (0.99×) |
+| PL ≤ 20 s | 0.05741 (3.46×) | 0.02419 (1.22×) | 0.09764 (0.94×) |
+| EN 60 s | 0.07367 (2.78×) | 0.01930 (1.21×) | 0.09065 (0.93×) |
+| PL 60 s | 0.07017 (2.97×) | 0.02136 (1.18×) | 0.09304 (0.94×) |
+| EN 2 min | 0.10576 (2.20×) | 0.04666 (0.74×) | 0.10375 (0.92×) |
+| PL 2 min | 0.11328 (2.35×) | 0.05128 (0.69×) | 0.10512 (1.01×) |
+
+Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
+
+| | CPU | MX450 | Intel UHD |
+| --- | --- | --- | --- |
+| EN ≤ 20 s | 5.97% / 5.97% | 5.97% / 6.00% | 5.97% / 6.03% |
+| PL ≤ 20 s | 6.68% / 6.72% | 6.64% / 6.64% | 6.64% / 6.56% |
+| EN 60 s | 23.62% / 24.09% | **36.02%** / 22.78% | **36.02%** / 22.92% |
+| PL 60 s | 7.80% / 7.88% | 7.88% / 7.84% | 7.88% / 7.72% |
+| EN 2 min | 36.91% / 36.84% | **71.92%** / 35.64% | **71.92%** / 35.38% |
+| PL 2 min | 10.33% / 10.33% | 10.29% / 10.37% | 10.29% / 10.37% |
+
+- The bold rows come from one passage. On `en_us/long60/long60_006.wav` and `en_us/long120/long120_003.wav` both
+  GPUs give the same transcript, which repeats "tamb" until the end of the file (460 words against the CPU's 104;
+  1,199 against NeMo's 209). The GPU decoder's guard against emitting without advancing matches the CPU's, and
+  the 60 s file is no longer than its neighbours, so the GPU encoder's output on that passage is the likely
+  difference. Not yet traced.
+- MX450, 2 min: ParakeetRuntime is slower than NeMo (0.69–0.74×). It peaked at 1,377–1,378 MB dedicated and 569 MB
+  shared GPU memory against a 1,620 MB budget; NeMo at 1,634–1,650 MB and 205–259 MB. Whether the spill to shared
+  memory causes the slowdown is not measured. In English the looping file adds decoder work as well.
+- Model load: ParakeetRuntime GPU 3.7–8.8 s, CPU 1.5–2.7 s; NeMo 1.1–2.2 s everywhere.
+- Peak RAM on the CPU: ParakeetRuntime 3.3–5.2 GB, NeMo 0.8–1.8 GB.
+- Compared with the 2026-11-23 desktop matrix (Core Ultra 7 270K Plus, RTX 5070 Ti, Intel iGPU, different files):
+  the CPU lead is 2.2–3.5× here against 3.9–4.3× there; the GPU leads of 1.9–3.1× there shrink to
+  0.69–1.22× on the MX450 and about 1× on the UHD.
