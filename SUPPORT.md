@@ -5,8 +5,8 @@ this GitHub repository.
 
 ## Start here
 
-1. Read the [README](README.md), especially the model and requirements sections.
-2. Check the model file's SHA-256 against the value in the README.
+1. Read the [README](README.md), then [using the library](docs/library.md) or [using the app](docs/app.md).
+2. Check the model file's SHA-256 against the value in [the speech model](docs/speech-model.md).
 3. Search [existing issues](https://github.com/kkolodziejczak/ParakeetRuntime.Net/issues).
 
 ## Open an issue
