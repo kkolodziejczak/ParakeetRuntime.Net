@@ -47,11 +47,8 @@ Measured on:
 - **Laptop:** 2026-11-25 at [`1078f4e`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/1078f4e);
   load 2026-11-26 at [`d5feee7`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/d5feee7).
 
-Every run, with its command and exact numbers, is in
-[benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
-
-Measured before the 2026-11-26 speed-ups; every run, with its command, is in
-[benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
+The speed and wrong-words columns predate the 2026-11-26 speed-ups. Every run, with its command and exact
+numbers, is in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
 
 ## Quick start
 
