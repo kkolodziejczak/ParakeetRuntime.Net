@@ -5,79 +5,70 @@
 [![NuGet downloads](https://img.shields.io/nuget/dt/ParakeetRuntime.Net?label=downloads)](https://www.nuget.org/packages/ParakeetRuntime.Net)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/LICENSE)
 
-**Offline speech-to-text for .NET on Windows.** NVIDIA's Parakeet TDT 0.6B v3 runs inside your process, on
-the processor or the graphics card, in 25 European languages. Audio never leaves your computer.
+Offline speech-to-text for .NET on Windows. ParakeetRuntime.Net runs NVIDIA's Parakeet TDT 0.6B v3 inside your process, on the CPU or GPU, across 25 European languages. Your audio never leaves the machine.
 
 ```csharp
 using ParakeetRuntime.Net;
 
 var model = SpeechModel.Default();
 await model.EnsureInstalledAsync();                       // downloads and checks the model once (714 MB)
-using var engine = await SpeechEngine.LoadAsync(model);   // under a second on a GPU
+using var engine = await SpeechEngine.LoadAsync(model);   // uses the GPU if one is usable, else the CPU
 string text = await engine.TranscribeWavAsync("hello.wav");
 ```
 
 ## Why
 
-- **Faster than NVIDIA's own C++ engine** on most hardware, with the same accuracy (table below).
-- **One NuGet package, nothing else to install.** Pure C#: no Python, no native runtime, no CUDA. The GPU path
-  uses Direct3D 12 (tested on NVIDIA and Intel graphics); without a usable GPU it runs on the processor.
-- **Private by design.** Transcription is local. The model is pinned to one file and its SHA-256 is checked.
-- **Also an app.** `parakeet-runtime.exe` gives you a page in the browser, a command line and a local HTTP API,
-  with no .NET installation.
+It is pure C# in one NuGet package, so you don't have to ship Python, CUDA, or native binaries alongside your app. On a GPU, the engine talks to Direct3D 12 (tested on NVIDIA and Intel) through the DLLs Windows already ships; if there isn't a usable GPU, it falls back to the CPU.
+
+On most hardware it runs faster than NVIDIA's own C++ engine, NeMo-Speech.cpp, with the same accuracy. Transcription stays local, and the model is pinned to one exact file verified by SHA-256.
+
+If you don't want to write .NET code, `parakeet-runtime.exe` packages the same engine as a standalone app with a browser UI, a command line, and a local HTTP API, with no .NET installation required.
 
 ## Compared with NeMo-Speech.cpp
 
-NVIDIA's NeMo-Speech.cpp against ParakeetRuntime.Net, on the same device, the same model and the same clips
-(FLEURS, Polish and English, 20 s or less). "Wrong words" counts how many words in 100 come out different from
-what was said; lower is better.
+Both engines ran the same model (`parakeet-tdt-0.6b-v3.q8_0.gguf`) on the same hardware against FLEURS Polish and English clips of 20 seconds or less (desktop and laptop used different clip sets). "1 min of audio" is how long ParakeetRuntime.Net takes to transcribe a minute of those clips, and "Wrong words in 100" is the word error rate. Lower is better for both.
 
-| Machine | Runs on | Speed | Wrong words in 100 | Model load |
-| --- | --- | --- | --- | --- |
-| Desktop | Processor (Core Ultra 7 270K Plus) | **4.2–4.3× faster** | 5–6, same as NeMo | 1.0 s, NeMo 0.6–1.6 s |
-| Desktop | Graphics card (RTX 5070 Ti) | **2.1–2.3× faster** | 5–6, same as NeMo | 1.9 s, NeMo 0.6–1.6 s |
-| Desktop | Integrated graphics | **2.2× faster** | 5–6, same as NeMo | 2.3 s, NeMo 0.6–1.6 s |
-| Laptop | Processor (Core i7-11850H) | **3.4–3.5× faster** | 6–7, same as NeMo | 0.4 s, NeMo 1.1–2.2 s |
-| Laptop | Graphics card (MX450) | **1.1–1.2× faster** | 6–7, same as NeMo | 0.5–1.0 s, NeMo 1.1–2.2 s |
-| Laptop | Integrated graphics (UHD) | about the same | 6–7, same as NeMo | 0.5–0.6 s, NeMo 1.1–2.2 s |
+| Machine | Device | 1 min of audio | vs. NeMo (same device) | Wrong words in 100 | Model load |
+| --- | --- | --- | --- | --- | --- |
+| Desktop | GPU (RTX 5070 Ti) | **0.15–0.16 s** | 2.1–2.3× faster | 5–6 (same as NeMo) | 1.9 s (NeMo: 0.6–1.6 s) |
+| Desktop | CPU (Core Ultra 7 270K Plus) | **0.88–0.90 s** | 4.2–4.3× faster | 5–6 (same as NeMo) | 1.0 s (NeMo: 0.6–1.6 s) |
+| Desktop | Integrated GPU | **1.8 s** | 2.2× faster | 5–6 (same as NeMo) | 2.3 s (NeMo: 0.6–1.6 s) |
+| Laptop | GPU (MX450) | **1.5–1.6 s** | 1.1–1.2× faster | 6–7 (same as NeMo) | 0.5–1.0 s (NeMo: 1.1–2.2 s) |
+| Laptop | CPU (Core i7-11850H) | **3.4–3.6 s** | 3.4–3.5× faster | 6–7 (same as NeMo) | 0.4 s (NeMo: 1.1–2.2 s) |
+| Laptop | Integrated GPU (UHD) | **5.8–5.9 s** | About the same | 6–7 (same as NeMo) | 0.5–0.6 s (NeMo: 1.1–2.2 s) |
 
-Measured on:
-
-- **Desktop:** 2026-11-22 and 2026-11-23, on the engine from before it moved into this repository.
-- **Laptop:** 2026-11-25 at [`1078f4e`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/1078f4e);
-  load 2026-11-26 at [`d5feee7`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/d5feee7).
-
-The speed and wrong-words columns predate the 2026-11-26 speed-ups. Every run, with its command and exact
-numbers, is in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
+Desktop numbers were measured on 2026-11-22 and 2026-11-23 on the engine before it moved into this repository. Laptop speed and accuracy were measured on 2026-11-25 at [`1078f4e`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/1078f4e), and laptop load times on 2026-11-26 at [`d5feee7`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/d5feee7). Everything else, including the desktop's load times, predates the 2026-11-26 speed-ups. Every run, with its command and full numbers, is in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
 
 ## Quick start
 
-**In your app:** `dotnet add package ParakeetRuntime.Net --prerelease`, then the code above.
-Target `net10.0-windows`.
-
-**As an app:** download `ParakeetRuntime.Net-<version>-win-x64.zip` from
-[Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases/latest), unzip it and run:
+In a .NET project targeting `net10.0-windows`, install the package and run the snippet at the top:
 
 ```powershell
-.\parakeet-runtime.exe                        # opens the page in your browser; drop a WAV on it
+dotnet add package ParakeetRuntime.Net --prerelease
+```
+
+To use the standalone app instead, download `ParakeetRuntime.Net-<version>-win-x64.zip` from [Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases/latest), unzip it, and run it from PowerShell:
+
+```powershell
+.\parakeet-runtime.exe                        # opens the browser UI; drop a WAV file on it
 .\parakeet-runtime.exe transcribe hello.wav   # prints the text
 .\parakeet-runtime.exe record                 # records the microphone until Enter, prints the text
+
+# While the app (or serve) is running, you can also call the local HTTP API:
 curl.exe -F file=@hello.wav http://127.0.0.1:5092/v1/audio/transcriptions
 ```
 
-Requirements: Windows 10 or 11, 64-bit. The GPU path needs Direct3D 12 and 900 MiB of video memory.
+You need 64-bit Windows 10 or 11. The GPU path requires Direct3D 12 and 900 MiB of video memory; without that, the engine runs on the CPU.
 
 ## Documentation
 
-- [Using the library](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/library.md): loading, CPU or GPU, microphone, audio formats, long audio
-- [Using the app](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/app.md): the page, commands, the HTTP API and its errors
-- [The speech model](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/speech-model.md): download, offline install, verifying release files
-- [How it works](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/how-it-works.md) and the engine pages it links to
-- [Benchmarks](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md) · [Contributing](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/CONTRIBUTING.md) · [Support](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/SUPPORT.md) · [Security](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/SECURITY.md) · [Code of Conduct](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/CODE_OF_CONDUCT.md)
+- [Using the library](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/library.md) explains loading, CPU and GPU options, microphone recording, WAV formats, and long audio.
+- [Using the app](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/app.md) walks through the browser UI, CLI commands, the HTTP API, and its error codes.
+- [The speech model](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/speech-model.md) details model downloads, offline installs, and verifying release checksums and signatures.
+- [How it works](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/how-it-works.md) outlines the pipeline and links to the internal engine docs.
+
+Also see [benchmarks](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md), [contributing](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/CONTRIBUTING.md), [support](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/SUPPORT.md), [security](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/SECURITY.md), and the [code of conduct](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/LICENSE). The engine is a C# port of parts
-of NVIDIA's NeMo-Speech.cpp (Apache-2.0, see
-[notices](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/THIRD-PARTY-NOTICES.md)). The model is
-© NVIDIA under CC BY 4.0. This project is not affiliated with or endorsed by NVIDIA.
+[MIT](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/LICENSE). The engine is a C# port of parts of NVIDIA's NeMo-Speech.cpp (Apache-2.0; see [THIRD-PARTY-NOTICES.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/THIRD-PARTY-NOTICES.md)). The speech model is © NVIDIA under CC BY 4.0. This project is not affiliated with or endorsed by NVIDIA.
