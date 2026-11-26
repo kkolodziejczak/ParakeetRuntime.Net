@@ -963,3 +963,29 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
   NeMo-Speech.cpp on the same device (22.78–22.92% at 60 s, 35.38–35.64% at 2 min).
 - RTF moved by −3% to +13% per row, faster on the MX450 in every row. The before and after runs were hours
   apart on a laptop, so this spread is not attributed to the change.
+
+## 2026-11-26 · Single-file compression of the exe
+
+- **Machine:** as in the 2026-11-25 laptop matrix (Intel Core i7-11850H, NVIDIA GeForce MX450, 32 GB RAM); another
+  process held the model loaded on the MX450, idle, during the runs
+- **Commit:** `4b7175d`; the compressed build adds only `EnableCompressionInSingleFile`
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Command:** `scripts/Build-Release.ps1 -Version 0.0.0` for the plain exe, the same `dotnet publish` with
+  `-p:EnableCompressionInSingleFile=true` for the compressed one. `--version` run 7 times (the first, then the
+  median of the other 6). `serve --no-browser --device cpu|gpu` started 3 times each, polling `/health` every
+  50 ms until `ready`; memory read 3 s later
+
+| | Plain | Compressed |
+| --- | --- | --- |
+| Exe size | 99.9 MB | 48.4 MB |
+| `--version`, first run | 235 ms | 250 ms |
+| `--version`, median of the next 6 | 72 ms | 142 ms |
+| `serve` answering `/health` | 0.6–0.7 s | 0.6–0.8 s |
+| Model ready, CPU | 2.8–3.7 s | 3.0–3.3 s |
+| Model ready, MX450 | 7.0–8.9 s | 6.1–7.6 s |
+| Working set when ready, CPU | 889–891 MB | 943–944 MB |
+| Working set when ready, MX450 | 719–855 MB | 775–909 MB |
+
+- Compression was kept (owner's decision): the download halves, model load is no slower, and each start costs
+  about 70 ms and 30–55 MB more. The council's prototype measured 103.6 → 50.3 MB.
+- Signing a compressed exe is not checked here; the first signed release run checks it.

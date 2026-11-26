@@ -6,6 +6,8 @@
     <AssemblyName>parakeet-runtime</AssemblyName>
     <RootNamespace>ParakeetRuntime.Net.Cli</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- Halves the single-file exe (99.9 to 48.4 MB) for about 70 ms more per start; see docs/benchmarks.md, 2026-11-26. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
