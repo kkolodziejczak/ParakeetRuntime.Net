@@ -80,10 +80,12 @@ dotnet test ParakeetRuntime.Net.slnx --configuration Release
 - Never commit models, recordings, or transcripts of real speech. Test audio is synthetic or from
   a public set (for example FLEURS) whose license allows it.
 - Every speed or accuracy figure in a document names its machine, model, audio, and date.
-- The README's table against NeMo-Speech.cpp has rows for the owner's laptop and desktop. After an
-  engine change lands on `master`, re-run `scripts/Run-Matrix.ps1` on the machine you are working on
-  (and the load harness, for the load column), update that machine's rows and its "Measured on" line
-  with the date and the `master` commit, and add the run to `docs/benchmarks.md`. The other
+- The table against NeMo-Speech.cpp in [README.md](README.md) and its shorter copy in the package
+  readme [src/ParakeetRuntime.Net/README.md](src/ParakeetRuntime.Net/README.md) have rows for the
+  owner's laptop and desktop. After an engine change lands on `master`, re-run
+  `scripts/Run-Matrix.ps1` on the machine you are working on (and the load harness, for the load
+  column), update that machine's rows and their measurement dates and `master` commit in both
+  readmes, and add the run to `docs/benchmarks.md`. The other
   machine's rows stay as they are until someone works there; the commit line shows how old they are.
 
 ## Documentation boundaries
@@ -91,8 +93,13 @@ dotnet test ParakeetRuntime.Net.slnx --configuration Release
 - [README.md](README.md) is the front page, for users and agents: what it is, a code sample, why,
   the table against NeMo-Speech.cpp, a quick start, links into `docs/`, license. Keep it short;
   details go into `docs/` ([library.md](docs/library.md), [app.md](docs/app.md),
-  [speech-model.md](docs/speech-model.md), [how-it-works.md](docs/how-it-works.md)). It is also the
-  NuGet package's readme, so its links are absolute.
+  [speech-model.md](docs/speech-model.md), [how-it-works.md](docs/how-it-works.md)). Its links are
+  absolute, because the release zip ships it.
+- [src/ParakeetRuntime.Net/README.md](src/ParakeetRuntime.Net/README.md) is the NuGet package's
+  readme, for developers using the library: install, the sample, how to use the engine, speed,
+  requirements. Plain CommonMark with absolute links and no images: nuget.org renders no HTML
+  and blocks images from many hosts.
+- Write or reword these public pages with the `public-docs` skill when it is available.
 - [CONTRIBUTING.md](CONTRIBUTING.md) is for contributors: setup, commands, pull requests.
 - Release mechanics and repository internals stay in this file.
 
