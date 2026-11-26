@@ -40,6 +40,12 @@ runs as whole `int` words.
   packing needs no second copy. Otherwise packing writes into new arrays, where the last partial
   group is padded with zero scales (and a zero bias).
 - The portable path keeps plain rows.
+- Every method and lambda that runs per frame or per weight on the CPU path (kernels, quantizing,
+  attention, mel, subsampling, the decoder, packing) carries `AggressiveOptimization`, so the JIT
+  compiles it fully the first time. With default tiering they started as unoptimized Tier0 code
+  and were recompiled during the first utterances: the first CPU transcription in a process compiled
+  455–605 methods and took 37–56% longer than later ones. The cost is losing profile-guided
+  recompilation, which does little for these straight SIMD loops.
 - A CPU load reads the 24 encoder layers in parallel, up to the thread budget, each worker with
   its own reader of the model file. Reading a tensor and turning its fp16 scales into floats is
   single-threaded per tensor, so reading the layers one after another kept a CPU load at 1.5–3

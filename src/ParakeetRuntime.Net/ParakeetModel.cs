@@ -1,5 +1,6 @@
 // Part of ParakeetRuntime.Net; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -224,12 +225,13 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 
     static bool IsGpuDeviceLost(Exception ex) => ex is COMException or InvalidOperationException or OutOfMemoryException;
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     float[] SubsampleDwStriding(float[] feats, int frames, out int T)
     {
         int W0 = mel.Mels, C = subCh;
         int H1 = (frames - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1, H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
         var y = new float[H2 * W2 * C];
-        Kernels.ForRanges(H2, (start, end) =>
+        Kernels.ForRanges(H2, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             var conv0RowsOneDepthwiseRowReads = new float[3 * W1 * C];
             float** input = stackalloc float*[3];
@@ -248,7 +250,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         var z = Kernels.GemmRelu(y, H2 * W2, c3wT, C, C, c3b);
         int H3 = (H2 - 1) / 2 + 1, W3 = (W2 - 1) / 2 + 1;
         var y2 = new float[H3 * W3 * C];
-        Kernels.For(H3, h =>
+        Kernels.For(H3, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (h) =>
         {
             float** input = stackalloc float*[3];
             fixed (float* zp = z, yp = y2, w5 = c5wByTap, b5 = c5b)
@@ -264,6 +266,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         return Kernels.Linear(channelMajorFrames, T, subOut!);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     void Conv0Row(float* feats, int H, int W, int r, float* taps, float* bias, float* output, int W1)
     {
         int C = subCh;
@@ -284,6 +287,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
             }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     void DepthwiseRow(float** inputRowsNullForPadding, int W, int Wout, float* taps, float* bias, float* output)
     {
         int C = subCh;
@@ -331,7 +335,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     float[] Glu(float[] c, int T)
     {
         var glu = EncoderScratch.Rent(T * d);
-        Kernels.For(T, t =>
+        Kernels.For(T, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (t) =>
         {
             fixed (float* cp = c, gp = glu)
                 for (int ch = 0; ch < d; ch += Vector<float>.Count)
@@ -346,7 +350,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     float[] DepthwiseConvolutionBatchNormSilu(Layer l, float[] glu, int T)
     {
         var dwo = EncoderScratch.Rent(T * d); int pad = (kernel - 1) / 2;
-        Kernels.For(T, t =>
+        Kernels.For(T, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (t) =>
         {
             fixed (float* gp = glu, op = dwo, wp = l.dwByTap, sp = l.bnScale, hp = l.bnShift)
                 for (int ch = 0; ch < d; ch += Vector<float>.Count)
@@ -382,6 +386,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         Kernels.LinearAdd(ctx, T, l.outp, 1f, residual);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     List<int> DecodeTdtGreedy(float[] enc, int T)
     {
         var encProj = Kernels.Linear(enc, T, jointEnc!);
@@ -421,6 +426,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         return tokens;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     (float[] g, float[][] h, float[][] c) Predict(int label, float[][] h, float[][] c)
     {
         var x = new float[predH];
@@ -441,6 +447,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         return (x, nh, nc);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int ArgMax(float[] a, int from, int n) { int best = from; for (int i = from + 1; i < from + n; i++) if (a[i] > a[best]) best = i; return best - from; }
 
     string Detokenize(List<int> tokens)

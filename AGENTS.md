@@ -49,9 +49,9 @@ ships. Keep it that way, so that any `net10.0` application can reference the pac
 
 ### Open follow-ups
 
-- Tiered JIT: with default tiering, `Kernels.Quantize`'s AVX2 passes stay at instrumented Tier0 for
-  a whole `--cpu-bench` run, which skews kernel A/B tests. A/B kernels with
-  `DOTNET_TieredCompilation=0`. Whether an app's first utterances run Tier0 code is not measured.
+- Tiered JIT: the hot CPU code is marked `AggressiveOptimization` (see
+  [docs/cpu-kernels.md](docs/cpu-kernels.md)). Mark every new hot method or lambda the same way,
+  and still A/B kernels with `DOTNET_TieredCompilation=0`.
 - Next CPU step, which needs the owner's OK: the positions-table walk in the attention scores.
 - Other platforms (decided 2026-11-24: v1 stays Windows-only): the cheap first step is CPU
   transcription and WAV on Linux x64. `ThreadBudget` calls `GetSystemCpuSetInformation` without an

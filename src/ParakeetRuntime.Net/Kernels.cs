@@ -43,13 +43,14 @@ internal static unsafe class Kernels
 
     public static Q8Activations Quantize(float[] x, int m, int k) => Quantize(x, m, k, avx2: HasAvx2AndFma);
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static Q8Activations Quantize(float[] x, int m, int k, bool avx2)
     {
         if (avx2 && !HasAvx2AndFma)
             throw new PlatformNotSupportedException("This CPU has no AVX2 and FMA.");
         ArgumentOutOfRangeException.ThrowIfGreaterThan(k, WidestRowWithInverseScalesOnStack);
         var q = EncoderScratch.Quant(m, k);
-        Parallel.For(0, m, Opt, r =>
+        Parallel.For(0, m, Opt, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (r) =>
         {
             int blocks = q.Blocks;
             float* inverses = stackalloc float[blocks];
@@ -70,7 +71,7 @@ internal static unsafe class Kernels
         return q;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     static void LargestMagnitudes256(float* x, int blocks, float* largest)
     {
         var withoutSignBit = Vector256.Create(int.MaxValue);
@@ -85,7 +86,7 @@ internal static unsafe class Kernels
         }
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     static void Round256(float* x, int blocks, float* inverses, sbyte* q, int* sums)
     {
         var perHalfPackToSequentialOrder = Vector256.Create(0, 4, 1, 5, 2, 6, 3, 7);
@@ -173,6 +174,7 @@ internal static unsafe class Kernels
         return new Q8Weights(path, takenOver.Rows, takenOver.K, q, d, padded);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void PackGroupInterleavingRowsByFourBytes(Q8Matrix source, int g, sbyte[] rows, float[] scales, sbyte[] q, float[] d)
     {
         int k = source.K, blocks = k / 32, count = Math.Min(8, source.Rows - g * 8);
@@ -221,10 +223,11 @@ internal static unsafe class Kernels
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void PackedQ8Gemm<TDot>(Q8Activations X, Q8Weights W, float[] Y, Epilogue e) where TDot : struct, IInt8Dot
     {
         int groups = (W.Rows + 7) / 8, threads = Math.Min(Threads, groups);
-        Parallel.For(0, threads, Opt, t =>
+        Parallel.For(0, threads, Opt, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (t) =>
         {
             int start = (int)((long)groups * t / threads), end = (int)((long)groups * (t + 1) / threads);
             fixed (sbyte* xq = X.Q, wq = W.Q) fixed (float* xd = X.D, wd = W.D, y = Y, bias = W.Bias) fixed (int* xs = X.Sums)
@@ -401,12 +404,13 @@ internal static unsafe class Kernels
         return Vector128.Sum(acc);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static float[] GemmRelu(float[] x, int m, float[] weightsTransposed, int n, int k, float[] bias)
     {
         RequireVectorPairs(n, nameof(n));
         var y = new float[(long)m * n];
         int tiles = (m + 3) / 4;
-        ForRanges(tiles, (start, end) =>
+        ForRanges(tiles, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             fixed (float* xp = x, wp = weightsTransposed, yp = y, bp = bias)
                 for (int tile = start; tile < end; tile++)
@@ -421,6 +425,7 @@ internal static unsafe class Kernels
             throw new ArgumentException($"{name} = {n} is not a multiple of {2 * Vector<float>.Count} floats.", name);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void FloatRows(float* x, int ldx, float* w, int ldw, float* y, int ldy, int rows, int n, int k, float* bias, bool relu)
     {
         for (int n0 = 0; n0 < n; n0 += 2 * Vector<float>.Count)
@@ -447,6 +452,7 @@ internal static unsafe class Kernels
         StorePair(a20, a21, y + 2 * ldy, relu); StorePair(a30, a31, y + 3 * ldy, relu);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void FloatTile1(float* x, float* w, int ldw, float* y, int k, float* bias, bool relu)
     {
         int v = Vector<float>.Count;
@@ -479,11 +485,12 @@ internal static unsafe class Kernels
 
     const int DestinationRowsPerSourceCacheLine = 16;
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static (float[] Table, int Stride) TransposePositions(float[] p, int P, int d)
     {
         int stride = P + 4 * Vector<float>.Count;
         var t = EncoderScratch.Rent(d * stride);
-        ForRanges((d + DestinationRowsPerSourceCacheLine - 1) / DestinationRowsPerSourceCacheLine, (start, end) =>
+        ForRanges((d + DestinationRowsPerSourceCacheLine - 1) / DestinationRowsPerSourceCacheLine, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             for (int block = start; block < end; block++)
             {
@@ -500,6 +507,7 @@ internal static unsafe class Kernels
 
     const int QueryRowsPerAttentionTask = 32;
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static void RelativeAttention(float[] qkv, int T, int d, int heads, float[] u, float[] v, float[] positions, int stride, int first, float[] ctx)
     {
         int dk = d / heads, pair = 2 * Vector<float>.Count, width = (T + pair - 1) / pair * pair, blocks = (T + QueryRowsPerAttentionTask - 1) / QueryRowsPerAttentionTask;
@@ -509,7 +517,7 @@ internal static unsafe class Kernels
         var qv = EncoderScratch.Rent(T * d);
         var keysInColumnPairRuns = EncoderScratch.Rent(d * width);
         var valuesInColumnPairRuns = EncoderScratch.Rent(T * d);
-        For(T, i =>
+        For(T, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (i) =>
         {
             fixed (float* row = &qkv[i * 3 * d], up = u, vp = v, qup = qu, qvp = qv, kp = keysInColumnPairRuns, valuesp = valuesInColumnPairRuns)
                 for (int h = 0, c = 0; h < heads; h++)
@@ -531,7 +539,7 @@ internal static unsafe class Kernels
                     c += dk;
                 }
         });
-        For(heads * blocks, task =>
+        For(heads * blocks, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (task) =>
         {
             int h = task / blocks, i0 = task % blocks * QueryRowsPerAttentionTask, rows = Math.Min(QueryRowsPerAttentionTask, T - i0);
             var scores = ArrayPool<float>.Shared.Rent(QueryRowsPerAttentionTask * width);
@@ -582,6 +590,7 @@ internal static unsafe class Kernels
         (a30 * sc).Store(s); (a31 * sc).Store(s + v);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void ScoreTile1(float* qu, float* qv, int dk, float* k, int ldk, float* p, int ldp, float* s, float scale)
     {
         int v = Vector<float>.Count;
@@ -595,6 +604,7 @@ internal static unsafe class Kernels
         (a0 * scale).Store(s); (a1 * scale).Store(s + v);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void Softmax(float* s, int n, int width)
     {
         int v = Vector<float>.Count;
@@ -613,10 +623,11 @@ internal static unsafe class Kernels
     static Vector<float> LargerOf(Vector<float> a, Vector<float> b) =>
         Vector<float>.Count == 8 && Avx.IsSupported ? Avx.Max(a.AsVector256(), b.AsVector256()).AsVector() : Vector.Max(a, b);
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static float[] LayerNorm(float[] x, int m, int d, float[] g, float[] b)
     {
         var o = EncoderScratch.Rent(x.Length);
-        Parallel.For(0, m, Opt, r =>
+        Parallel.For(0, m, Opt, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (r) =>
         {
             fixed (float* xp = x, op = o, gp = g, bp = b)
                 NormRow(xp + (long)r * d, op + (long)r * d, gp, bp, d);
@@ -626,6 +637,7 @@ internal static unsafe class Kernels
 
     const float LayerNormEpsilon = 1e-5f;
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void NormRow(float* x, float* o, float* g, float* b, int d)
     {
         int n = Vector<float>.Count;

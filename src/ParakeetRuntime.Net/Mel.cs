@@ -1,4 +1,6 @@
 // Part of ParakeetRuntime.Net; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
+using System.Runtime.CompilerServices;
+
 namespace ParakeetRuntime.Net;
 
 internal sealed class Mel
@@ -63,6 +65,7 @@ internal sealed class Mel
         return packed;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public float[] Compute(float[] audio, out int frames)
     {
         int n = audio.Length;
@@ -71,7 +74,7 @@ internal sealed class Mel
         frames = (padded.Length - nFft) / hop + 1;
         var feats = new float[frames * nMels];
         int woff = (nFft - win) / 2, valid = Math.Min(n / hop, frames), nf = frames;
-        Kernels.ForRanges(frames, (start, end) =>
+        Kernels.ForRanges(frames, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             var re = new double[nFft]; var im = new double[nFft]; var power = new float[nBins];
             for (int f = start; f < end; f++)
@@ -100,6 +103,7 @@ internal sealed class Mel
         return feats;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     void Fft(double[] re, double[] im)
     {
         int n = re.Length;
