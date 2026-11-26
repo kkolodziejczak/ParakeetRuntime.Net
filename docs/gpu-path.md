@@ -183,7 +183,13 @@ fused epilogue (`GpuEpilogue`: store, SiLU, add to `Y`, add half to `Y`).
     thread groups per axis (four times as many in all) as the 64 x 64 tile would, which keeps a large GPU busy on short utterances.
 - Each thread stages 4 rows x 4 k values of `X`, and the same of `W`, transposed into one
   `float4` per k: `rowQuad = tid >> 3` is the group of four rows, `kCol = 4 * (tid & 7)` the first
-  k. The shared arrays are indexed `[k][rowQuad]`.
+  k. The shared arrays are indexed `[k][rowQuad ^ (k >> 2)]`, an XOR swizzle of the quad column.
+  A `[k]` row is 16 or 8 `float4`s, a multiple of the 32 four-byte banks, so without the swizzle
+  the 8 threads that share a `rowQuad` (one per `kCol`) store to the same banks: an 8-way
+  conflict on every staging store. With it they store to 8 different `float4` columns. The reads
+  undo it (`ty ^ (k >> 2)`, `tx ^ (k >> 2)`; `k >> 2` is a constant per unrolled `k`), so each
+  thread reads the same values in the same order and the bits don't change. On the laptop's
+  MX450 this made transcription about 15% faster.
 - Four consecutive rows load under one bounds check while all four are inside the matrix
   (`LoadX4Rows`, `LoadW4Rows`); only the last partial group checks each row.
 - Every out-of-bounds load sits under a real `[branch]`. Without it, FXC may hoist a root SRV load

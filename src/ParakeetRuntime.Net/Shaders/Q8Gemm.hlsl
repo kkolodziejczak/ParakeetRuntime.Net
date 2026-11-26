@@ -144,7 +144,9 @@ void Q8GemmMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     const uint kBlocks = K >> 5;
 
     const uint rowQuad = tid >> 3;
-    const uint kCol = (tid & 7) << 2;
+    const uint kIdx = tid & 7;
+    const uint kCol = kIdx << 2;
+    const uint swizzledQuad = rowQuad ^ kIdx;
     const uint xRow = groupM + (rowQuad << 2);
     const uint wRow = groupN + (rowQuad << 2);
 
@@ -156,24 +158,25 @@ void Q8GemmMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
         float4 rx0, rx1, rx2, rx3;
         LoadX4Rows(xRow, kStart, rx0, rx1, rx2, rx3);
-        sXByKAndRowQuad[kCol + 0][rowQuad] = float4(rx0.x, rx1.x, rx2.x, rx3.x);
-        sXByKAndRowQuad[kCol + 1][rowQuad] = float4(rx0.y, rx1.y, rx2.y, rx3.y);
-        sXByKAndRowQuad[kCol + 2][rowQuad] = float4(rx0.z, rx1.z, rx2.z, rx3.z);
-        sXByKAndRowQuad[kCol + 3][rowQuad] = float4(rx0.w, rx1.w, rx2.w, rx3.w);
+        sXByKAndRowQuad[kCol + 0][swizzledQuad] = float4(rx0.x, rx1.x, rx2.x, rx3.x);
+        sXByKAndRowQuad[kCol + 1][swizzledQuad] = float4(rx0.y, rx1.y, rx2.y, rx3.y);
+        sXByKAndRowQuad[kCol + 2][swizzledQuad] = float4(rx0.z, rx1.z, rx2.z, rx3.z);
+        sXByKAndRowQuad[kCol + 3][swizzledQuad] = float4(rx0.w, rx1.w, rx2.w, rx3.w);
 
         float4 rw0, rw1, rw2, rw3;
         LoadW4Rows(wRow, kStart, kBlocks, kb, rw0, rw1, rw2, rw3);
-        sWByKAndColumnQuad[kCol + 0][rowQuad] = float4(rw0.x, rw1.x, rw2.x, rw3.x);
-        sWByKAndColumnQuad[kCol + 1][rowQuad] = float4(rw0.y, rw1.y, rw2.y, rw3.y);
-        sWByKAndColumnQuad[kCol + 2][rowQuad] = float4(rw0.z, rw1.z, rw2.z, rw3.z);
-        sWByKAndColumnQuad[kCol + 3][rowQuad] = float4(rw0.w, rw1.w, rw2.w, rw3.w);
+        sWByKAndColumnQuad[kCol + 0][swizzledQuad] = float4(rw0.x, rw1.x, rw2.x, rw3.x);
+        sWByKAndColumnQuad[kCol + 1][swizzledQuad] = float4(rw0.y, rw1.y, rw2.y, rw3.y);
+        sWByKAndColumnQuad[kCol + 2][swizzledQuad] = float4(rw0.z, rw1.z, rw2.z, rw3.z);
+        sWByKAndColumnQuad[kCol + 3][swizzledQuad] = float4(rw0.w, rw1.w, rw2.w, rw3.w);
 
         GroupMemoryBarrierWithGroupSync();
 
         [unroll]
         for (uint k = 0; k < 32; k++)
         {
-            float4 top = sXByKAndRowQuad[k][ty], bottom = sXByKAndRowQuad[k][ty + 8], w = sWByKAndColumnQuad[k][tx];
+            uint ks = k >> 2;
+            float4 top = sXByKAndRowQuad[k][ty ^ ks], bottom = sXByKAndRowQuad[k][(ty + 8) ^ ks], w = sWByKAndColumnQuad[k][tx ^ ks];
             top0 += top.x * w; top1 += top.y * w; top2 += top.z * w; top3 += top.w * w;
             bottom0 += bottom.x * w; bottom1 += bottom.y * w; bottom2 += bottom.z * w; bottom3 += bottom.w * w;
         }
@@ -211,7 +214,9 @@ void Q8GemmSmallMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     float4 acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
 
     const uint rowQuad = tid >> 3;
-    const uint kCol = (tid & 7) << 2;
+    const uint kIdx = tid & 7;
+    const uint kCol = kIdx << 2;
+    const uint swizzledQuad = rowQuad ^ kIdx;
     const uint xRow = groupM + (rowQuad << 2);
     const uint wRow = groupN + (rowQuad << 2);
 
@@ -221,24 +226,25 @@ void Q8GemmSmallMain(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
         float4 rx0, rx1, rx2, rx3;
         LoadX4Rows(xRow, kStart, rx0, rx1, rx2, rx3);
-        sXByKAndRowQuadSmall[kCol + 0][rowQuad] = float4(rx0.x, rx1.x, rx2.x, rx3.x);
-        sXByKAndRowQuadSmall[kCol + 1][rowQuad] = float4(rx0.y, rx1.y, rx2.y, rx3.y);
-        sXByKAndRowQuadSmall[kCol + 2][rowQuad] = float4(rx0.z, rx1.z, rx2.z, rx3.z);
-        sXByKAndRowQuadSmall[kCol + 3][rowQuad] = float4(rx0.w, rx1.w, rx2.w, rx3.w);
+        sXByKAndRowQuadSmall[kCol + 0][swizzledQuad] = float4(rx0.x, rx1.x, rx2.x, rx3.x);
+        sXByKAndRowQuadSmall[kCol + 1][swizzledQuad] = float4(rx0.y, rx1.y, rx2.y, rx3.y);
+        sXByKAndRowQuadSmall[kCol + 2][swizzledQuad] = float4(rx0.z, rx1.z, rx2.z, rx3.z);
+        sXByKAndRowQuadSmall[kCol + 3][swizzledQuad] = float4(rx0.w, rx1.w, rx2.w, rx3.w);
 
         float4 rw0, rw1, rw2, rw3;
         LoadW4Rows(wRow, kStart, kBlocks, kb, rw0, rw1, rw2, rw3);
-        sWByKAndColumnQuadSmall[kCol + 0][rowQuad] = float4(rw0.x, rw1.x, rw2.x, rw3.x);
-        sWByKAndColumnQuadSmall[kCol + 1][rowQuad] = float4(rw0.y, rw1.y, rw2.y, rw3.y);
-        sWByKAndColumnQuadSmall[kCol + 2][rowQuad] = float4(rw0.z, rw1.z, rw2.z, rw3.z);
-        sWByKAndColumnQuadSmall[kCol + 3][rowQuad] = float4(rw0.w, rw1.w, rw2.w, rw3.w);
+        sWByKAndColumnQuadSmall[kCol + 0][swizzledQuad] = float4(rw0.x, rw1.x, rw2.x, rw3.x);
+        sWByKAndColumnQuadSmall[kCol + 1][swizzledQuad] = float4(rw0.y, rw1.y, rw2.y, rw3.y);
+        sWByKAndColumnQuadSmall[kCol + 2][swizzledQuad] = float4(rw0.z, rw1.z, rw2.z, rw3.z);
+        sWByKAndColumnQuadSmall[kCol + 3][swizzledQuad] = float4(rw0.w, rw1.w, rw2.w, rw3.w);
 
         GroupMemoryBarrierWithGroupSync();
 
         [unroll]
         for (uint k = 0; k < 32; k++)
         {
-            float4 vx = sXByKAndRowQuadSmall[k][ty], vw = sWByKAndColumnQuadSmall[k][tx];
+            uint ks = k >> 2;
+            float4 vx = sXByKAndRowQuadSmall[k][ty ^ ks], vw = sWByKAndColumnQuadSmall[k][tx ^ ks];
             acc0 += vx.x * vw; acc1 += vx.y * vw; acc2 += vx.z * vw; acc3 += vx.w * vw;
         }
 
