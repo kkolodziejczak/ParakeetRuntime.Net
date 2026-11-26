@@ -105,6 +105,7 @@ internal sealed unsafe class D3D12Device : IDisposable
         nint[] allocators, nint commandList, nint fence, nint fenceEvent, nint rootSignature,
         nint timestampHeap, ulong timestampFrequency)
     {
+        fenceValueWhenAllocatorIsFree = new ulong[allocators.Length];
         AdapterName = adapterName;
         DedicatedVideoMemoryBytes = dedicatedVram;
         SharedSystemMemoryBytes = sharedMem;
@@ -114,7 +115,6 @@ internal sealed unsafe class D3D12Device : IDisposable
         this.device = device;
         this.queue = queue;
         this.allocators = allocators;
-        fenceValueWhenAllocatorIsFree = new ulong[allocators.Length];
         this.commandList = commandList;
         this.fence = fence;
         this.fenceEvent = fenceEvent;
@@ -609,8 +609,9 @@ internal sealed unsafe class D3D12Device : IDisposable
         CheckHr(ListClose(commandList));
         nint list = commandList;
         ExecuteCommandLists(queue, 1, &list);
-        ulong target = ++fenceValue;
+        ulong target = fenceValue + 1;
         CheckHr(Signal(queue, fence, target));
+        fenceValue = target;
         fenceValueWhenAllocatorIsFree[currentAllocator] = target;
         return target;
     }
@@ -622,13 +623,27 @@ internal sealed unsafe class D3D12Device : IDisposable
         ulong completed = GetCompletedValue(fence);
         if (completed < target)
         {
-            CheckHr(SetEventOnCompletion(fence, target, fenceEvent));
-            uint wait = WaitForSingleObject(fenceEvent, INFINITE);
-            if (wait != 0)
-                throw new InvalidOperationException($"GPU fence wait failed ({wait}).");
-            completed = GetCompletedValue(fence);
+            if (SetEventOnCompletion(fence, target, fenceEvent) >= 0)
+            {
+                uint wait = WaitForSingleObject(fenceEvent, INFINITE);
+                if (wait != 0)
+                    throw new InvalidOperationException($"GPU fence wait failed ({wait}).");
+                completed = GetCompletedValue(fence);
+            }
+            else
+            {
+                completed = PollUntilReached(target);
+            }
         }
         ThrowIfDeviceRemoved(completed);
+    }
+
+    private ulong PollUntilReached(ulong target)
+    {
+        ulong completed;
+        while ((completed = GetCompletedValue(fence)) < target && GetDeviceRemovedReason(device) >= 0)
+            Thread.Sleep(1);
+        return completed;
     }
 
     private void ThrowIfDeviceRemoved(ulong completedFenceValue)

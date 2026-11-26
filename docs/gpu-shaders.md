@@ -6,7 +6,8 @@ The shaders live in `src/ParakeetRuntime.Net/Shaders/`. The build compiles each 
 inbox `d3dcompiler_47.dll`, for shader model 5.1 (`cs_5_1`) at optimization level 3, and embeds the
 bytecode (see [gpu-path.md](gpu-path.md#pipelines-and-compilation)). The host refers to entry points by
 their string names, so an entry point must never be renamed. An entry point is a function with a
-`[numthreads(...)]` attribute directly before `void <name>(`; the build finds them that way.
+`[numthreads(...)]` attribute directly before `void <name>(`, outside comments; the build finds them
+that way. The engine names the ones it uses in `ParakeetGpu.Pipelines` and `LargeGemmPipeline`.
 
 ## Shared conventions
 

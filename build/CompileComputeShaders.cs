@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Build.Framework;
@@ -13,42 +14,68 @@ public sealed class CompileComputeShaders : Microsoft.Build.Utilities.Task
 {
     private const uint OptimizationLevel3 = 1 << 15;
     private const string Target = "cs_5_1";
+    private const string FingerprintFile = "sources.sha256";
 
     [Required] public ITaskItem[] Sources { get; set; } = Array.Empty<ITaskItem>();
 
     [Required] public string OutputDirectory { get; set; } = "";
 
+    [Required] public string TaskSource { get; set; } = "";
+
+    [Output] public ITaskItem[] Bytecode { get; set; } = Array.Empty<ITaskItem>();
+
     public override bool Execute()
     {
-        Directory.CreateDirectory(OutputDirectory);
-        var entries = Sources.Select(source => source.GetMetadata("FullPath"))
-            .SelectMany(path => EntryPoints(path).Select(entry => (Path: path, Entry: entry))).ToList();
-        if (entries.Count == 0)
+        var sources = Sources.Select(source => source.GetMetadata("FullPath")).OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path => (Path: path, Text: File.ReadAllText(path))).ToList();
+        var shaders = sources.SelectMany(source => EntryPoints(source.Text).Select(entry => (source.Path, source.Text, Entry: entry))).ToList();
+        if (shaders.Count == 0)
         {
             Log.LogError("No [numthreads] entry points were found in the shader sources.");
             return false;
         }
-        var failures = new ConcurrentBag<string>();
-        System.Threading.Tasks.Parallel.ForEach(entries, shader =>
+        var outputs = shaders.Select(shader => System.IO.Path.Combine(OutputDirectory, $"{System.IO.Path.GetFileName(shader.Path)}.{shader.Entry}.dxbc")).ToList();
+        var fingerprint = Fingerprint(sources);
+        var fingerprintPath = System.IO.Path.Combine(OutputDirectory, FingerprintFile);
+        if (!File.Exists(fingerprintPath) || File.ReadAllText(fingerprintPath) != fingerprint || !outputs.All(File.Exists))
         {
-            try
+            if (Directory.Exists(OutputDirectory))
+                Directory.Delete(OutputDirectory, recursive: true);
+            Directory.CreateDirectory(OutputDirectory);
+            var failures = new ConcurrentBag<string>();
+            System.Threading.Tasks.Parallel.For(0, shaders.Count, i =>
             {
-                var fileName = System.IO.Path.GetFileName(shader.Path);
-                var bytecode = Compile(File.ReadAllText(shader.Path), fileName, shader.Entry);
-                File.WriteAllBytes(System.IO.Path.Combine(OutputDirectory, $"{fileName}.{shader.Entry}.dxbc"), bytecode);
-            }
-            catch (Exception failure)
-            {
-                failures.Add(failure.Message);
-            }
-        });
-        foreach (var failure in failures)
-            Log.LogError(failure);
-        return failures.IsEmpty;
+                try
+                {
+                    File.WriteAllBytes(outputs[i], Compile(shaders[i].Text, System.IO.Path.GetFileName(shaders[i].Path), shaders[i].Entry));
+                }
+                catch (Exception failure)
+                {
+                    failures.Add(failure.Message);
+                }
+            });
+            foreach (var failure in failures)
+                Log.LogError(failure);
+            if (!failures.IsEmpty)
+                return false;
+            File.WriteAllText(fingerprintPath, fingerprint);
+        }
+        Bytecode = outputs.Select(output => (ITaskItem)new TaskItem(output)).ToArray();
+        return true;
     }
 
-    private static IEnumerable<string> EntryPoints(string path) =>
-        Regex.Matches(File.ReadAllText(path), @"\[numthreads\([^)]*\)\]\s*void\s+(\w+)").Cast<Match>().Select(match => match.Groups[1].Value);
+    private string Fingerprint(IEnumerable<(string Path, string Text)> sources)
+    {
+        var all = new StringBuilder(File.ReadAllText(TaskSource));
+        foreach (var source in sources)
+            all.Append('\0').Append(System.IO.Path.GetFileName(source.Path)).Append('\0').Append(source.Text);
+        using (var sha = SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(all.ToString()))).Replace("-", "");
+    }
+
+    private static IEnumerable<string> EntryPoints(string source) =>
+        Regex.Matches(Regex.Replace(source, @"//[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline), @"\[\s*numthreads\s*\([^)]*\)\s*\]\s*void\s+(\w+)")
+            .Cast<Match>().Select(match => match.Groups[1].Value);
 
     private static byte[] Compile(string source, string sourceName, string entry)
     {

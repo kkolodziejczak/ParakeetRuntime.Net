@@ -19,13 +19,7 @@ The library has no Windows SDK projection: the engine reaches Windows only throu
 `d3d12.dll`, `dxgi.dll`, `d3dcompiler_47.dll`, `kernel32.dll` and `ole32.dll`, which every supported Windows
 ships. Keep it that way, so that any `net10.0` application can reference the package.
 
-## Where the engine came from
-
-The engine was built in LocalBuddy and moved here on 2026-11-23 as a fresh copy of
-`kkolodziejczak/LocalBuddy` at `19d2905` (branch `perf/engine-matrix`); its history stays there.
-Its measurements are in LocalBuddy PR #3 and in that branch's commit messages. LocalBuddy will
-switch to the `ParakeetRuntime.Net` package in its own repository. Its live and replay commands stay
-there, because they use the app's audio capture.
+## The engine
 
 - The public API is `SpeechEngine`, `SpeechEngineOptions`, `SpeechModel`, `Microphone`,
   `MicrophoneDevice` and `MicrophoneRecording`; everything else in the engine is internal.

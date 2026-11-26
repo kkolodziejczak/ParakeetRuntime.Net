@@ -46,6 +46,29 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private readonly GpuQ8Weight subOutWeight, jointEncWeight, jointPredWeight, jointOutWeight;
     private readonly LstmLayerGpu[] lstmLayers;
     private readonly LayerGpu[] layers;
+
+    internal static readonly (string File, string Entry)[] Pipelines =
+    [
+        ("EncoderOps.hlsl", "LayerNormMain"),
+        ("EncoderOps.hlsl", "RelPosAttentionMain"),
+        ("EncoderOps.hlsl", "GluMain"),
+        ("EncoderOps.hlsl", "DepthwiseConvBnSiluMain"),
+        ("SubsampleOps.hlsl", "SubConv0ReluMain"),
+        ("SubsampleOps.hlsl", "SubDwConvMain"),
+        ("SubsampleOps.hlsl", "F32GemmReluMain"),
+        ("SubsampleOps.hlsl", "SubTransposeMain"),
+        ("DecoderOps.hlsl", "InitDecStateMain"),
+        ("DecoderOps.hlsl", "ZeroBufferMain"),
+        ("DecoderOps.hlsl", "LstmLayerCondMain"),
+        ("DecoderOps.hlsl", "Q8GemvCondMain"),
+        ("DecoderOps.hlsl", "ArgMaxAndStepMain"),
+        ("MelOps.hlsl", "MelFftLogMain"),
+        ("MelOps.hlsl", "MelNormalizeMain"),
+        ("Q8Gemm.hlsl", "Q8GemmSmallMain"),
+    ];
+
+    internal static readonly (string File, string Entry) LargeGemmPipeline = ("Q8Gemm.hlsl", "Q8GemmMain");
+
     private readonly Task<nint> largeGemmCompile;
     private nint psoQ8GemmSmall, psoLn, psoAtt, psoGlu, psoDw;
     private nint psoSubConv0, psoSubDw, psoF32GemmRelu, psoSubTranspose;
@@ -178,26 +201,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         int melBins = mel.Mels;
         GpuBuffer? wqMega = null, wdMega = null, floatMega = null;
-        (string File, string Entry)[] shaderSpecs =
-        [
-            ("EncoderOps.hlsl", "LayerNormMain"),
-            ("EncoderOps.hlsl", "RelPosAttentionMain"),
-            ("EncoderOps.hlsl", "GluMain"),
-            ("EncoderOps.hlsl", "DepthwiseConvBnSiluMain"),
-            ("SubsampleOps.hlsl", "SubConv0ReluMain"),
-            ("SubsampleOps.hlsl", "SubDwConvMain"),
-            ("SubsampleOps.hlsl", "F32GemmReluMain"),
-            ("SubsampleOps.hlsl", "SubTransposeMain"),
-            ("DecoderOps.hlsl", "InitDecStateMain"),
-            ("DecoderOps.hlsl", "ZeroBufferMain"),
-            ("DecoderOps.hlsl", "LstmLayerCondMain"),
-            ("DecoderOps.hlsl", "Q8GemvCondMain"),
-            ("DecoderOps.hlsl", "ArgMaxAndStepMain"),
-            ("MelOps.hlsl", "MelFftLogMain"),
-            ("MelOps.hlsl", "MelNormalizeMain"),
-            ("Q8Gemm.hlsl", "Q8GemmSmallMain"),
-        ];
-        var compiledPsos = new nint[shaderSpecs.Length];
+        var compiledPsos = new nint[Pipelines.Length];
         Task? compiling = null;
         Task<nint>? largeGemm = null;
         try
@@ -263,9 +267,9 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 Require(g.Q8Shape(p + "self_attn.linear_pos.weight") == (d, d), $"Invalid {p}linear_pos shape.");
             }
 
-            largeGemm = Task.Run(() => gpu.EmbeddedPipeline("Q8Gemm.hlsl", "Q8GemmMain"));
-            compiling = Task.Run(() => Parallel.For(0, shaderSpecs.Length, idx =>
-                compiledPsos[idx] = gpu.EmbeddedPipeline(shaderSpecs[idx].File, shaderSpecs[idx].Entry)));
+            largeGemm = Task.Run(() => gpu.EmbeddedPipeline(LargeGemmPipeline.File, LargeGemmPipeline.Entry));
+            compiling = Task.Run(() => Parallel.For(0, Pipelines.Length, idx =>
+                compiledPsos[idx] = gpu.EmbeddedPipeline(Pipelines[idx].File, Pipelines[idx].Entry)));
 
             (int Rows, int K)[] perLayerQ8 =
             [

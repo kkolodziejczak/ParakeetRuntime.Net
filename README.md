@@ -15,10 +15,6 @@ model from a GGUF file and transcribes audio on the processor, with int8 kernels
 card, through Direct3D 12. Audio never leaves your computer, and no Python or separate native runtime
 is needed.
 
-> **Status: before the first release.** The engine moved here from
-> [LocalBuddy](https://github.com/kkolodziejczak/LocalBuddy), where it was built and tuned. Its
-> API may still change before version 1.0.
-
 ## Two ways to use it
 
 | Download | Choose it when |
@@ -107,7 +103,9 @@ string spoken = await engine.TranscribeAsync(samples);
   | --- | --- | --- | --- |
   | Seconds of work per minute of audio | 3.4–3.6 s | 1.4 s | 5.9 s |
   | Words wrong (word error rate) | 6.0–6.7% | 6.0–6.6% | 6.0–6.6% |
-  | Loading the model (2026-11-26) | 0.6–1.4 s | 0.4–0.6 s | 0.4–0.5 s |
+
+  Loading the model on the same laptop, measured 2026-11-26 with the model file already read once, takes
+  0.6–1.4 s on the processor, 0.4–0.6 s on the MX450 and 0.4–0.5 s on the Intel UHD.
 
   On a desktop (Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti), measured 2026-11-23 on the same
   model and FLEURS Polish and English clips of 20 s to 2 minutes, the RTX took under 0.2 s and the processor

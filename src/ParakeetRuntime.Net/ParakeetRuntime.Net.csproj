@@ -22,34 +22,37 @@
   <!--
     Every [numthreads] entry point is compiled to DXBC here, with the same compiler, target and flags as
     D3D12Device.CompilePipeline, so loading the model only hands bytecode to the driver. FXC needs several
-    seconds of CPU per load otherwise. d3dcompiler_47.dll ships with Windows; elsewhere the build skips this
-    and the engine compiles at run time.
+    seconds of CPU per load otherwise. The task compiles again whenever the content of the shader sources or
+    of the task differs from the last compile, or an output is missing. d3dcompiler_47.dll ships with
+    Windows; elsewhere the build skips this and the engine compiles at run time.
   -->
   <UsingTask TaskName="CompileComputeShaders" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
     <ParameterGroup>
       <Sources ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
       <OutputDirectory ParameterType="System.String" Required="true" />
+      <TaskSource ParameterType="System.String" Required="true" />
+      <Bytecode ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
     </ParameterGroup>
     <Task>
       <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs" />
     </Task>
   </UsingTask>
 
-  <PropertyGroup>
-    <ShaderBytecodeDirectory>$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)shader-bytecode\</ShaderBytecodeDirectory>
-  </PropertyGroup>
+  <ItemGroup>
+    <UpToDateCheckInput Include="$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs" />
+  </ItemGroup>
 
-  <Target Name="CompileShadersToBytecode" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'"
-          Inputs="@(ShaderSource);$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs" Outputs="$(ShaderBytecodeDirectory)compiled.stamp">
-    <RemoveDir Directories="$(ShaderBytecodeDirectory)" />
-    <CompileComputeShaders Sources="@(ShaderSource)" OutputDirectory="$(ShaderBytecodeDirectory)" />
-    <Touch Files="$(ShaderBytecodeDirectory)compiled.stamp" AlwaysCreate="true" />
-  </Target>
-
-  <Target Name="EmbedShaderBytecode" AfterTargets="CompileShadersToBytecode" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'">
+  <Target Name="EmbedShaderBytecode" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'">
+    <PropertyGroup>
+      <ShaderBytecodeDirectory>$([MSBuild]::NormalizeDirectory($(MSBuildProjectDirectory), $(IntermediateOutputPath), 'shader-bytecode'))</ShaderBytecodeDirectory>
+    </PropertyGroup>
+    <CompileComputeShaders Sources="@(ShaderSource)" OutputDirectory="$(ShaderBytecodeDirectory)"
+                           TaskSource="$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs">
+      <Output TaskParameter="Bytecode" ItemName="ShaderBytecode" />
+    </CompileComputeShaders>
     <ItemGroup>
-      <ShaderBytecode Include="$(ShaderBytecodeDirectory)*.dxbc" />
       <EmbeddedResource Include="@(ShaderBytecode)" LogicalName="Shaders/%(Filename)%(Extension)" />
+      <FileWrites Include="@(ShaderBytecode);$(ShaderBytecodeDirectory)sources.sha256" />
     </ItemGroup>
   </Target>
 

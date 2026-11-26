@@ -70,8 +70,10 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
   `EmbeddedPipeline` hands that bytecode to `CreateComputePipelineState`, so a load runs no HLSL
   compiler. FXC took several seconds of CPU per load before. The `.hlsl` sources stay embedded:
   without bytecode (a build on another OS) the entry point compiles at run time, and `--gemm-bench`
-  compiles shader files given to it. `ShaderBytecodeTests` checks that every embedded bytecode is
-  what the current source compiles to.
+  compiles shader files given to it. The task keeps a SHA-256 of the sources' and its own content in
+  `obj/<configuration>/<framework>/shader-bytecode/` and compiles again when it differs or an output
+  is missing. `ParakeetGpu.Pipelines` and `LargeGemmPipeline` list the pipelines the engine creates;
+  `ShaderBytecodeTests` checks that each one is embedded as what its current source compiles to.
 - The pipelines are created in parallel (`Parallel.For`) while the weights upload, only after every
   tensor shape in the model has been checked against the model metadata and the shader limits. A
   bad model fails at once.
@@ -104,7 +106,10 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
 - The device has two command allocators and takes them in turn. `BeginCommands` waits until the
   next allocator's last submission has finished, resets it and the list, and sets the root
   signature. `Submit` closes the list, submits it and signals the fence, and returns the fence
-  value to wait for; `WaitFor` waits for it, and `ExecuteAndWait` does both.
+  value to wait for; `WaitFor` waits for it, and `ExecuteAndWait` does both. The fence value
+  advances only after `Signal` succeeds, so a wait never targets a value that was never queued. If
+  `SetEventOnCompletion` fails, `WaitFor` polls the fence every millisecond until it is reached or
+  the device is removed.
 - The weight upload uses this to overlap: it fills one pair of 64 MB + 8 MB staging buffers from
   the model file while the GPU copies the other pair. A buffer pair is refilled only after the
   copy that read it has finished. The staging buffers are released only when the GPU is idle,
