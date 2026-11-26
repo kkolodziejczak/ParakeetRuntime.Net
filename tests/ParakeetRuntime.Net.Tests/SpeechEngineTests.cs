@@ -106,6 +106,44 @@ public sealed class SpeechEngineMemoryTests
         GC.KeepAlive(model);
     }
 
+    [InstalledModelFact]
+    public void A_cpu_transcription_after_the_first_reuses_its_buffers_instead_of_allocating_them()
+    {
+        using var model = new ParakeetModel(SpeechModel.Default().Path, allowGpu: false);
+        var tenSeconds = Noise(seconds: 10, seed: 1);
+        model.Transcribe(tenSeconds);
+
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        model.Transcribe(tenSeconds);
+
+        Assert.True(GC.GetTotalAllocatedBytes(precise: true) - before < 8L << 20);
+    }
+
+    [InstalledModelFact]
+    public void A_cpu_model_reused_across_lengths_writes_what_a_fresh_model_writes_for_each_clip()
+    {
+        float[][] clips = [Noise(seconds: 12, seed: 2), Noise(seconds: 3, seed: 3), Noise(seconds: 19.5, seed: 4), Noise(seconds: 3, seed: 5)];
+        using var reused = new ParakeetModel(SpeechModel.Default().Path, allowGpu: false);
+
+        var reusedTexts = clips.Select(reused.Transcribe).ToArray();
+
+        var freshTexts = clips.Select(clip =>
+        {
+            using var fresh = new ParakeetModel(SpeechModel.Default().Path, allowGpu: false);
+            return fresh.Transcribe(clip);
+        }).ToArray();
+        Assert.Equal(freshTexts, reusedTexts);
+    }
+
+    private static float[] Noise(double seconds, int seed)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(seconds * 16_000)];
+        for (var i = 0; i < samples.Length; i++)
+            samples[i] = (float)(random.NextDouble() - 0.5) * 0.2f;
+        return samples;
+    }
+
     [InstalledModelAndGpuFact]
     public async Task A_gpu_load_leaves_no_managed_arrays_behind_for_an_app_that_waits_for_speech()
     {

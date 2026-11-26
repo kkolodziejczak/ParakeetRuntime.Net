@@ -26,6 +26,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     float[] embed = []; readonly int predH, vocab, blank; readonly int[] durations; readonly int maxSymbols;
     Q8Weights[] ih = [], hh = []; Q8Weights? jointEnc, jointPred, jointOut;
     readonly string[] pieces;
+    readonly EncoderScratch subsamplingScratch = new(), encoderScratch = new();
 
     sealed class Layer
     {
@@ -160,6 +161,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         c0wByTap = c0b = c2wByTap = c2b = c3wT = c3b = c5wByTap = c5b = c6wT = c6b = [];
         subOut = jointEnc = jointPred = jointOut = null;
         cpuLoaded = false;
+        ReleaseScratch();
     }
 
     public string Transcribe(float[] audio16KhzMono) => Transcribe(audio16KhzMono, out _);
@@ -203,16 +205,19 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         var feats = mel.Compute(audio16KhzMono, out int frames);
         BenchmarkClock?.Lap("mel");
         var t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-        var x = SubsampleDwStriding(feats, frames, out int T);
+        float[] x;
+        int T;
+        using (subsamplingScratch.BeginUtterance())
+            x = SubsampleDwStriding(feats, frames, out T);
         BenchmarkClock?.Lap("subsampling");
         var t2 = System.Diagnostics.Stopwatch.GetTimestamp();
-        using (var scratch = new EncoderScratch())
+        using (encoderScratch.BeginUtterance())
         {
             foreach (var l in layers)
             {
-                scratch.Rewind();
+                encoderScratch.Rewind();
                 var next = ConformerLayer(l, x, T);
-                Array.Copy(next, x, x.Length);
+                Array.Copy(next, x, T * d);
             }
         }
         var t3 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -220,7 +225,15 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         BenchmarkClock?.Lap("decoder");
         var t4 = System.Diagnostics.Stopwatch.GetTimestamp();
         profile = new TranscribeProfile((t1 - t0) * toMs, (t2 - t1) * toMs, (t3 - t2) * toMs, (t4 - t3) * toMs);
+        if (T > TwentySecondsOfEncoderFrames)
+            ReleaseScratch();
         return text;
+    }
+
+    private void ReleaseScratch()
+    {
+        subsamplingScratch.Release();
+        encoderScratch.Release();
     }
 
     static bool IsGpuDeviceLost(Exception ex) => ex is COMException or InvalidOperationException or OutOfMemoryException;
@@ -230,7 +243,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     {
         int W0 = mel.Mels, C = subCh;
         int H1 = (frames - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1, H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
-        var y = new float[H2 * W2 * C];
+        var y = EncoderScratch.Rent(H2 * W2 * C);
         Kernels.ForRanges(H2, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             var conv0RowsOneDepthwiseRowReads = new float[3 * W1 * C];
@@ -247,9 +260,10 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
                     DepthwiseRow(input, W1, W2, w2, b2, yp + h * W2 * C);
                 }
         });
-        var z = Kernels.GemmRelu(y, H2 * W2, c3wT, C, C, c3b);
+        var z = EncoderScratch.Rent(H2 * W2 * C);
+        Kernels.GemmReluInto(y, H2 * W2, c3wT, C, C, c3b, z);
         int H3 = (H2 - 1) / 2 + 1, W3 = (W2 - 1) / 2 + 1;
-        var y2 = new float[H3 * W3 * C];
+        var y2 = EncoderScratch.Rent(H3 * W3 * C);
         Kernels.For(H3, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (h) =>
         {
             float** input = stackalloc float*[3];
@@ -259,9 +273,10 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
                 DepthwiseRow(input, W2, W3, w5, b5, yp + h * W3 * C);
             }
         });
-        var a = Kernels.GemmRelu(y2, H3 * W3, c6wT, C, C, c6b);
+        var a = EncoderScratch.Rent(H3 * W3 * C);
+        Kernels.GemmReluInto(y2, H3 * W3, c6wT, C, C, c6b, a);
         T = H3;
-        var channelMajorFrames = new float[T * C * W3];
+        var channelMajorFrames = EncoderScratch.Rent(T * C * W3);
         for (int t = 0; t < T; t++) for (int w = 0; w < W3; w++) for (int c = 0; c < C; c++) channelMajorFrames[t * C * W3 + c * W3 + w] = a[(t * W3 + w) * C + c];
         return Kernels.Linear(channelMajorFrames, T, subOut!);
     }
@@ -398,15 +413,16 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         int last = -1;
         var (g, hN, cN) = Predict(last, h, c);
         var predProj = Kernels.Linear(g, 1, jointPred!);
+        var z = new float[J];
+        var logits = new float[jointOut!.Rows];
         int t = 0;
         while (t < T)
         {
             int symbols = 0, skip = 0; bool loop = true;
             while (loop && symbols < maxSymbols)
             {
-                var z = new float[J];
                 for (int k = 0; k < J; k++) z[k] = MathF.Max(0, encProj[t * J + k] + predProj[k]);
-                var logits = Kernels.Linear(z, 1, jointOut!);
+                Kernels.LinearInto(z, 1, jointOut, logits);
                 int tok = ArgMax(logits, 0, vocab), di = ArgMax(logits, vocab, durations.Length);
                 skip = durations[di];
                 if (tok == blank && skip == 0) skip = 1;

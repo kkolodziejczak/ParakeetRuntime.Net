@@ -129,7 +129,8 @@ public sealed class KernelsTests
 
     private static Q8Activations QuantizeOverLouder(float[] x, int rows, int k, bool avx2)
     {
-        using var scratch = new EncoderScratch();
+        var scratch = new EncoderScratch();
+        using var utterance = scratch.BeginUtterance();
         var louder = Kernels.Quantize(Enumerable.Range(0, x.Length).Select(i => i % 7 + 1f).ToArray(), rows, k, avx2);
         var q = Kernels.Quantize(x, rows, k, avx2);
         Assert.Same(louder, q);

@@ -186,8 +186,15 @@ are removed. The result keeps the punctuation and capitals the model writes.
 - `ParakeetModel` is not thread-safe. `SpeechEngine` runs one transcription at a time. Once a
   transcription starts it runs to the end, even when the caller cancels, because a cancelled wait
   would release the lock while the model still runs.
-- The CPU path reuses its per-layer buffers through `EncoderScratch`. A rented buffer still holds
-  whatever the previous layer left in it.
+- The CPU path reuses its buffers through two `EncoderScratch` instances the model owns, one for
+  the subsampling and one for the encoder layers, kept from one utterance to the next. Within an
+  utterance a slot holds the same buffer for every layer, so a rented buffer still holds whatever
+  the previous layer left in it. The first rent of a slot in an utterance zero-fills the requested
+  length, so every utterance starts as it would with fresh arrays (the attention's key runs rely on
+  zero padding). A slot only grows, so a buffer can be longer than requested; code uses the
+  lengths it was given, never `.Length`. After an utterance over 20 s, and on `Dispose`, the
+  model drops both scratches, so a long call doesn't pin its larger buffers. A CPU transcription
+  of 10 s allocates about 66 MB without the reuse and under 8 MB with it.
 - When the GPU fails with a lost device (a GPU timeout reset, a driver reset or running out of video
   memory, seen as `COMException`, `InvalidOperationException` or `OutOfMemoryException`), the
   engine retires the GPU for good, loads the CPU weights, and finishes the utterance on the CPU.

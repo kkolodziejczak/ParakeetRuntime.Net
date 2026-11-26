@@ -81,7 +81,8 @@ internal static class CpuBench
 
     private static double Best(Action run)
     {
-        using var scratch = new EncoderScratch();
+        var scratch = new EncoderScratch();
+        using var utterance = scratch.BeginUtterance();
         var best = double.MaxValue;
         for (var i = 0; i <= Runs; i++)
         {

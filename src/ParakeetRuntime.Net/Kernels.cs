@@ -196,9 +196,12 @@ internal static unsafe class Kernels
     public static float[] Linear(float[] x, int m, Q8Weights w, Activation activation = Activation.None)
     {
         var y = EncoderScratch.Rent(checked(m * w.Rows));
-        Product(Quantize(x, m, w.K), w, y, new Epilogue(activation, Add: false, Scale: 1));
+        LinearInto(x, m, w, y, activation);
         return y;
     }
+
+    public static void LinearInto(float[] x, int m, Q8Weights w, float[] y, Activation activation = Activation.None) =>
+        Product(Quantize(x, m, w.K), w, y, new Epilogue(activation, Add: false, Scale: 1));
 
     public static void LinearAdd(float[] x, int m, Q8Weights w, float scale, float[] target) =>
         Product(Quantize(x, m, w.K), w, target, new Epilogue(Activation.None, Add: true, Scale: scale));
@@ -407,8 +410,15 @@ internal static unsafe class Kernels
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static float[] GemmRelu(float[] x, int m, float[] weightsTransposed, int n, int k, float[] bias)
     {
-        RequireVectorPairs(n, nameof(n));
         var y = new float[(long)m * n];
+        GemmReluInto(x, m, weightsTransposed, n, k, bias, y);
+        return y;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static void GemmReluInto(float[] x, int m, float[] weightsTransposed, int n, int k, float[] bias, float[] y)
+    {
+        RequireVectorPairs(n, nameof(n));
         int tiles = (m + 3) / 4;
         ForRanges(tiles, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
@@ -416,7 +426,6 @@ internal static unsafe class Kernels
                 for (int tile = start; tile < end; tile++)
                     FloatRows(xp + (long)tile * 4 * k, k, wp, n, yp + (long)tile * 4 * n, n, Math.Min(4, m - tile * 4), n, k, bp, relu: true);
         });
-        return y;
     }
 
     static void RequireVectorPairs(int n, string name)
@@ -626,7 +635,7 @@ internal static unsafe class Kernels
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static float[] LayerNorm(float[] x, int m, int d, float[] g, float[] b)
     {
-        var o = EncoderScratch.Rent(x.Length);
+        var o = EncoderScratch.Rent(checked(m * d));
         Parallel.For(0, m, Opt, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (r) =>
         {
             fixed (float* xp = x, op = o, gp = g, bp = b)
@@ -677,12 +686,15 @@ internal sealed class Q8Weights(Int8Path path, int rows, int k, sbyte[] q, float
 
 internal sealed class Q8Activations(int rows, int k)
 {
-    public int Rows { get; } = rows;
+    public int CapacityRows { get; } = rows;
+    public int Rows { get; private set; } = rows;
     public int K { get; } = k;
     public int Blocks { get; } = k / 32;
     public sbyte[] Q { get; } = new sbyte[checked(rows * k)];
     public float[] D { get; } = new float[checked(rows * (k / 32))];
     public int[] Sums { get; } = new int[checked(rows * (k / 32))];
+
+    public void UseRows(int rows) => Rows = rows <= CapacityRows ? rows : throw new ArgumentOutOfRangeException(nameof(rows));
 }
 
 internal enum Activation { None, Silu }
