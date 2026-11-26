@@ -37,6 +37,7 @@ ships. Keep it that way, so that any `net10.0` application can reference the pac
 - [docs/gpu-shaders.md](docs/gpu-shaders.md): what every shader entry point computes, its layouts and invariants.
 - [docs/microphone.md](docs/microphone.md): WASAPI capture into memory, its thread, cap, timeouts and errors.
 - [docs/benchmarks-howto.md](docs/benchmarks-howto.md) and [docs/benchmarks.md](docs/benchmarks.md): how to measure, and every measurement so far.
+- [docs/ideas.md](docs/ideas.md): performance ideas not built yet, with what is known and how to prove them.
 
 ### Owner's rules for the engine code
 
@@ -52,7 +53,8 @@ ships. Keep it that way, so that any `net10.0` application can reference the pac
 - Tiered JIT: the hot CPU code is marked `AggressiveOptimization` (see
   [docs/cpu-kernels.md](docs/cpu-kernels.md)). Mark every new hot method or lambda the same way,
   and still A/B kernels with `DOTNET_TieredCompilation=0`.
-- Next CPU step, which needs the owner's OK: the positions-table walk in the attention scores.
+- Performance ideas not built yet, including the positions-table walk in the attention scores, are
+  in [docs/ideas.md](docs/ideas.md).
 - Other platforms (decided 2026-11-24: v1 stays Windows-only): the cheap first step is CPU
   transcription and WAV on Linux x64. `ThreadBudget` calls `GetSystemCpuSetInformation` without an
   `OperatingSystem.IsWindows()` guard; guard it, drop the assembly's Windows-only mark for that path,
