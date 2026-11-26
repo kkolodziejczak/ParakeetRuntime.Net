@@ -1068,3 +1068,63 @@ With 1 s between transcriptions, before and background alternating, 3 processes 
   and 8 on the MX450 run no extra full collection (working set 246 MB).
 - A collection doesn't change any computed value, so transcripts were not compared; `--corpus` builds
   `ParakeetModel` directly and never runs this code. The full test suite passes (261/261).
+
+## 2026-11-26 · Eight changes from a three-model research round
+
+- **Machine:** as in the 2026-11-25 laptop matrix (Intel Core i7-11850H, NVIDIA GeForce MX450 2 GB, Intel UHD
+  Graphics, 32 GB RAM); PrivateType was running with its own engine during all runs
+- **Commit:** baseline `564a3a6`; the changes are `04b194c` (Dispose frees the CPU weights), `9f7fb5f` (memory
+  after a GPU load), `39d00f6` (parallel CPU load), `5efe9f9` (AggressiveOptimization), `77b6079` (CPU buffer
+  reuse), `a669b7a` (GEMM swizzle), `e82c82d` (GPU position table), `2e6688a` (valid frames); "final" is `2e6688a`
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** FLEURS dev `wav16`, clips of 20 s or less: `en_us` 150 clips (1,436.8 s) and `pl_pl` 150 clips for
+  transcripts; the first 50 `en_us` clips for the Intel UHD and the CPU corpus timings; `en_us`
+  `608005572552850776.wav` (14.9 s) for load, first-call and memory
+- **Command:** `--corpus ... --max-seconds 20 --passes 3 --affinity 5500` (best pass, builds alternating), a
+  console app on the public API (`LoadAsync`, `TranscribeAsync` 4 times, `Dispose`, 3 loads per process, 3 or
+  4 processes per build), `--session-memory --device cpu --sessions 2`, `--cpu-bench --frames 250`
+
+Each patch alone against the baseline, before it was committed (builds alternating):
+
+| Change | Measured | Before | After |
+| --- | --- | --- | --- |
+| GEMM swizzle | MX450, 150 clips, best pass (2 rounds) | 32.44 / 32.72 s | 27.33 / 27.77 s |
+| GEMM swizzle | UHD, 50 clips, best pass (2 rounds) | 45.93 / 49.10 s | 43.94 / 44.93 s |
+| GPU position table | MX450, 150 clips (2 rounds) | 32.44 / 32.72 s | 30.53 / 30.70 s |
+| GPU position table | UHD, 50 clips (1 round) | 45.93 / 49.10 s | 43.24 s |
+| Parallel CPU load | load 1 / reload, median ms | 878 / 743 | 495 / 378 |
+| AggressiveOptimization | first CPU transcription / later, median ms | 1,313 / 992 | 1,101 / 1,033 |
+| CPU buffer reuse | allocated per CPU transcription | 66.3 MB | 2.8 MB (Neon's patch) |
+| Dispose fix | private bytes after Dispose, CPU | 814 MB | 28 MB |
+| GPU load memory | working set / private bytes right after an MX450 load | 391 / 1,146 MB | 211 / 963 MB |
+
+All eight together, baseline against final:
+
+| Measured | Baseline | Final |
+| --- | --- | --- |
+| UHD, 50 clips, best pass (2 rounds) | 48.36 / 48.54 s | 42.33 / 42.30 s |
+| CPU, 50 clips, best pass (2 rounds) | 37.79 / 37.54 s | 37.42 / 31.39 s |
+| CPU corpus memory peak | 2,645–2,774 MB | 1,464–1,468 MB |
+| CPU load 1 / reload, median ms (4 processes) | 802 / 640 | 399 / 355 |
+| First CPU transcription / later, median ms | 1,158 / 938 | 967 / 837 |
+| Allocated per CPU transcription after the first | 66.3 MB | 10.7 MB |
+| CPU working set after 3 loads and 12 transcriptions | 1,720 MB | 991 MB |
+| MX450 load 1 / reload, median ms (3 processes) | 531 / 414 | 528 / 420 |
+| MX450 transcription of the 14.9 s clip, later calls, median ms | 252 | 210 |
+| MX450 working set after 3 loads | 406 MB | 230 MB |
+| Private bytes after Dispose, CPU, session 1 / 2 | 813 / 814 MB | 26 / 30 MB |
+| Second CPU session while running | 1,787 MB | 1,018 MB |
+
+- Transcripts: the baseline and every build up to `e82c82d` give identical text in 150/150 `en_us` and 150/150
+  `pl_pl` clips on the CPU (checked at `39d00f6` and `77b6079`) and on the MX450 (each GPU patch). The final
+  build changes 6 clips per device, all from the valid-frames change: WER on the CPU 5.97 → 5.94% (`en_us`) and
+  6.68 → 6.64% (`pl_pl`), on the MX450 5.97 → 5.90% and 6.64 → 6.60%.
+- The MX450 corpus numbers for the final build are inconclusive: by then the GPU sat at 72 °C idle and shared
+  with a browser, and the baseline's three passes within one run ranged 31.4–38.2 s. Two rounds gave
+  31.59 / 38.71 s against 28.37 / 30.55 s, and a third set 31.38 / 39.87 s against 32.65 / 28.27 s. The
+  per-patch rows above were taken earlier on the cool machine.
+- The CPU corpus pair is noisy too (the first round is level, the second 16% faster); the CPU changes target
+  load, the first call and memory, not steady transcription speed.
+- The two review-fix commits after `2e6688a` (`96b74f6`, `b9a9712`) change no transcript: identical results to
+  `2e6688a` on the CPU (`96b74f6`) and the MX450 (both), both languages.
+- Ideas measured and not built, and ideas not measured, are in [ideas.md](ideas.md).
