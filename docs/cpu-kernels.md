@@ -40,6 +40,11 @@ runs as whole `int` words.
   packing needs no second copy. Otherwise packing writes into new arrays, where the last partial
   group is padded with zero scales (and a zero bias).
 - The portable path keeps plain rows.
+- A CPU load reads the 24 encoder layers in parallel, up to the thread budget, each worker with
+  its own reader of the model file. Reading a tensor and turning its fp16 scales into floats is
+  single-threaded per tensor, so reading the layers one after another kept a CPU load at 1.5–3
+  busy cores; in parallel the load takes about half the time for about 40 MB more memory while it
+  runs.
 
 ### Tiles
 

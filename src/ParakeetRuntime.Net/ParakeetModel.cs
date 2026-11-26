@@ -81,30 +81,31 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         subOut = WithBias(g, "encoder.pre_encode.out");
         jointEnc = WithBias(g, "joint.enc"); jointPred = WithBias(g, "joint.pred"); jointOut = WithBias(g, "joint.joint_net.2");
         layers = new Layer[layersN];
-        for (int i = 0; i < layersN; i++)
+        Parallel.For(0, layersN, new ParallelOptions { MaxDegreeOfParallelism = Kernels.ThreadCount }, () => new Gguf(modelPath), (i, _, layerReader) =>
         {
             string p = $"encoder.layers.{i}.";
             var l = layers[i] = new Layer
             {
-                nFf1g = g.Floats(p + "norm_feed_forward1.weight"), nFf1b = g.Floats(p + "norm_feed_forward1.bias"),
-                nConvg = g.Floats(p + "norm_conv.weight"), nConvb = g.Floats(p + "norm_conv.bias"),
-                nAttg = g.Floats(p + "norm_self_att.weight"), nAttb = g.Floats(p + "norm_self_att.bias"),
-                nFf2g = g.Floats(p + "norm_feed_forward2.weight"), nFf2b = g.Floats(p + "norm_feed_forward2.bias"),
-                nOutg = g.Floats(p + "norm_out.weight"), nOutb = g.Floats(p + "norm_out.bias"),
-                ff1a = Packed(g, p + "feed_forward1.linear1.weight"), ff1b = Packed(g, p + "feed_forward1.linear2.weight"),
-                ff2a = Packed(g, p + "feed_forward2.linear1.weight"), ff2b = Packed(g, p + "feed_forward2.linear2.weight"),
-                pw1 = Packed(g, p + "conv.pointwise_conv1.weight"), pw2 = Packed(g, p + "conv.pointwise_conv2.weight"),
-                qkv = Kernels.Pack(g.Q8(p + "self_attn.linear_q.weight", p + "self_attn.linear_k.weight", p + "self_attn.linear_v.weight"), null, int8Path),
-                outp = Packed(g, p + "self_attn.linear_out.weight"), pos = Packed(g, p + "self_attn.linear_pos.weight"),
-                u = g.Floats(p + "self_attn.pos_bias_u"), v = g.Floats(p + "self_attn.pos_bias_v"),
+                nFf1g = layerReader.Floats(p + "norm_feed_forward1.weight"), nFf1b = layerReader.Floats(p + "norm_feed_forward1.bias"),
+                nConvg = layerReader.Floats(p + "norm_conv.weight"), nConvb = layerReader.Floats(p + "norm_conv.bias"),
+                nAttg = layerReader.Floats(p + "norm_self_att.weight"), nAttb = layerReader.Floats(p + "norm_self_att.bias"),
+                nFf2g = layerReader.Floats(p + "norm_feed_forward2.weight"), nFf2b = layerReader.Floats(p + "norm_feed_forward2.bias"),
+                nOutg = layerReader.Floats(p + "norm_out.weight"), nOutb = layerReader.Floats(p + "norm_out.bias"),
+                ff1a = Packed(layerReader, p + "feed_forward1.linear1.weight"), ff1b = Packed(layerReader, p + "feed_forward1.linear2.weight"),
+                ff2a = Packed(layerReader, p + "feed_forward2.linear1.weight"), ff2b = Packed(layerReader, p + "feed_forward2.linear2.weight"),
+                pw1 = Packed(layerReader, p + "conv.pointwise_conv1.weight"), pw2 = Packed(layerReader, p + "conv.pointwise_conv2.weight"),
+                qkv = Kernels.Pack(layerReader.Q8(p + "self_attn.linear_q.weight", p + "self_attn.linear_k.weight", p + "self_attn.linear_v.weight"), null, int8Path),
+                outp = Packed(layerReader, p + "self_attn.linear_out.weight"), pos = Packed(layerReader, p + "self_attn.linear_pos.weight"),
+                u = layerReader.Floats(p + "self_attn.pos_bias_u"), v = layerReader.Floats(p + "self_attn.pos_bias_v"),
             };
-            l.dwByTap = Transpose(g.Floats(p + "conv.depthwise_conv.weight"), d);
-            var w = g.Floats(p + "conv.batch_norm.weight"); var b = g.Floats(p + "conv.batch_norm.bias");
-            var mean = g.Floats(p + "conv.batch_norm.running_mean"); var var = g.Floats(p + "conv.batch_norm.running_var");
+            l.dwByTap = Transpose(layerReader.Floats(p + "conv.depthwise_conv.weight"), d);
+            var w = layerReader.Floats(p + "conv.batch_norm.weight"); var b = layerReader.Floats(p + "conv.batch_norm.bias");
+            var mean = layerReader.Floats(p + "conv.batch_norm.running_mean"); var var = layerReader.Floats(p + "conv.batch_norm.running_var");
             l.bnScale = new float[d]; l.bnShift = new float[d];
             for (int c = 0; c < d; c++) { l.bnScale[c] = w[c] / MathF.Sqrt(var[c] + 1e-5f); l.bnShift[c] = b[c] - mean[c] * l.bnScale[c]; }
             (l.projectedPositionsUpTo20s, l.projectedPositionsUpTo20sStride) = ProjectPositions(l, TwentySecondsOfEncoderFrames);
-        }
+            return layerReader;
+        }, layerReader => layerReader.Dispose());
         embed = g.Floats("decoder.prediction.embed.weight");
         ih = new Q8Weights[predLayers]; hh = new Q8Weights[predLayers];
         for (int i = 0; i < predLayers; i++)
