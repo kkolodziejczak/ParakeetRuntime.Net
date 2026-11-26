@@ -237,8 +237,6 @@ internal sealed class Gguf : IDisposable
         return matrix;
     }
 
-    public long LargestQ8TensorValues => tensors.Values.Where(tensor => tensor.Type == Q8_0).Select(tensor => tensor.Count).DefaultIfEmpty(0).Max();
-
     public (int Rows, int K) Q8Shape(string name)
     {
         var tensor = Find(name);

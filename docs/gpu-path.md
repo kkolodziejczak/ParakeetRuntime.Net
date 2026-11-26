@@ -103,7 +103,9 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
   every later utterance up to 20 s binds the rows it needs from the middle of that table (an SRV
   byte offset) instead of 24 positional GEMMs per utterance. Each output row of the Q8 GEMM is the
   same chain of multiply-adds whatever the row count, so a slice of the table has the bits a
-  per-utterance projection would have. Longer utterances still project per utterance. This is
+  per-utterance projection would have. Longer utterances still project per utterance, and so does
+  every utterance when the model's position table has fewer than 501 rows or the table could not be
+  allocated; a failed allocation keeps the GPU. The table is filled in a submit of its own. This is
   8% of the encoder's GEMM work; on the laptop's MX450 transcription got about 6% faster.
 - The decoder state buffers are fixed in size and small. Each LSTM layer's hidden state `decH[i]`
   holds two slots (`LstmHiddenPingPongSlots`), so `LstmLayerCondMain` reads one slot and writes the
@@ -118,12 +120,14 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
   advances only after `Signal` succeeds, so a wait never targets a value that was never queued. If
   `SetEventOnCompletion` fails, `WaitFor` polls the fence every millisecond until it is reached or
   the device is removed.
-- The weight upload uses this to overlap: it fills one pair of 16 MB + 2 MB staging buffers from
-  the model file while the GPU copies the other pair. A buffer pair is refilled only after the
+- The weight upload uses this to overlap: it fills one pair of staging buffers (16 MB + 2 MB, or
+  as large as the largest staged tensor with the scales' buffer an eighth of that) from the model
+  file while the GPU copies the other pair. A buffer pair is refilled only after the
   copy that read it has finished. The staging buffers are released only when the GPU is idle,
   also on a failed load. The driver frees released upload buffers only at some later submit,
   seconds after the load, so an app that loads and waits for speech holds them until then; the
-  pairs are small for that reason, and the largest tensor (the joint output, 5.2 MB) still fits.
+  pairs are small for that reason; the default model's largest tensor (the joint output, 5.2 MB)
+  fits in 16 MB.
   The GPU copy is never what the load waits for, so smaller pairs don't make it slower.
 - D3D12 resource-state rules apply: a buffer a shader reads is in
   `NON_PIXEL_SHADER_RESOURCE`, a buffer it writes is in `UNORDERED_ACCESS`, and copies need

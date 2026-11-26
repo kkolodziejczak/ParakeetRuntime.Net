@@ -84,7 +84,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private GpuBuffer? decTokens, decTokensRb;
     private const int MostFramesReadingTheCachedPositions = 251;
     private const ulong SmallStagingQBytes = 16UL * 1024 * 1024;
-    private const int QkvTensorsStagedTogether = 3;
     private GpuBuffer? projectedPositionsUpTo20s;
     private bool positionsCanBeCached;
     private ulong ProjectedPositionsBytesPerLayer => (ulong)(2 * MostFramesReadingTheCachedPositions - 1) * (ulong)d * 4;
@@ -283,9 +282,10 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 (ff, d), (d, ff), (ff, d), (d, ff),
                 (2 * d, d), (d, d), (3 * d, d), (d, d), (d, d),
             ];
-            ulong totalQ = 0, totalD = 0;
+            ulong totalQ = 0, totalD = 0, largestStagedQ = 0;
             void AddQ8Size(int rows, int k)
             {
+                largestStagedQ = Math.Max(largestStagedQ, D3D12Device.Align256((ulong)rows * (ulong)k));
                 totalQ += D3D12Device.Align256((ulong)rows * (ulong)k);
                 ulong halves = (ulong)rows * (ulong)(k / 32);
                 totalD += D3D12Device.Align256(((halves + 1) / 2) * 4);
@@ -329,7 +329,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             wdMega = gpu.CreateDefaultBuffer(totalD, allowUav: false);
             floatMega = gpu.CreateDefaultBuffer(totalF, allowUav: false);
 
-            ulong stageQCap = Math.Max(SmallStagingQBytes, D3D12Device.Align256((ulong)(QkvTensorsStagedTogether * g.LargestQ8TensorValues)));
+            ulong stageQCap = Math.Max(SmallStagingQBytes, largestStagedQ);
             ulong stageDCap = stageQCap / 8;
             using var firstStageQ = gpu.CreateUploadBuffer(stageQCap);
             using var firstStageD = gpu.CreateUploadBuffer(stageDCap);
@@ -1235,16 +1235,24 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             positionsCanBeCached = false;
             return;
         }
-        gpu.ExecuteAndWait();
-        gpu.BeginCommands();
-        int rows = 2 * MostFramesReadingTheCachedPositions - 1;
-        uint firstRowByteOffset = (uint)((long)((peRows + 1) / 2 - MostFramesReadingTheCachedPositions) * d * 4);
-        gpu.Transition(table, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        for (int i = 0; i < layers.Length; i++)
-            DispatchQ8Gemm(floatMega, peOffset, firstRowByteOffset, table, rows, layers[i].Pos, GpuEpilogue.Store, (ulong)i * ProjectedPositionsBytesPerLayer);
-        gpu.Transition(table, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        try
+        {
+            gpu.ExecuteAndWait();
+            gpu.BeginCommands();
+            int rows = 2 * MostFramesReadingTheCachedPositions - 1;
+            uint firstRowByteOffset = (uint)((long)((peRows + 1) / 2 - MostFramesReadingTheCachedPositions) * d * 4);
+            gpu.Transition(table, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            for (int i = 0; i < layers.Length; i++)
+                DispatchQ8Gemm(floatMega, peOffset, firstRowByteOffset, table, rows, layers[i].Pos, GpuEpilogue.Store, (ulong)i * ProjectedPositionsBytesPerLayer);
+            gpu.Transition(table, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            gpu.ExecuteAndWait();
+        }
+        catch
+        {
+            table.Dispose();
+            throw;
+        }
         projectedPositionsUpTo20s = table;
-        gpu.ExecuteAndWait();
         gpu.BeginCommands();
     }
 

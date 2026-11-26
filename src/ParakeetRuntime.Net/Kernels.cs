@@ -379,9 +379,10 @@ internal static unsafe class Kernels
             sum + Avx2.MultiplyAddAdjacent(Avx2.MultiplyAddAdjacent(Avx2.Abs(w), Avx2.Sign(x, w)), Vector256.Create((short)1));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void PortableQ8Gemm(Q8Activations X, Q8Weights W, float[] Y, Epilogue e)
     {
-        Parallel.For(0, W.Rows, Opt, n =>
+        Parallel.For(0, W.Rows, Opt, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (n) =>
         {
             fixed (sbyte* xq = X.Q, wq = W.Q)
                 for (int m = 0; m < X.Rows; m++)
@@ -395,6 +396,7 @@ internal static unsafe class Kernels
         });
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static int BlockDot(sbyte* x, sbyte* w)
     {
         var acc = Vector128<int>.Zero;

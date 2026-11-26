@@ -23,7 +23,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     Q8Weights? subOut;
     Layer[] layers = [];
     ParakeetGpu? gpu;
-    bool cpuLoaded;
+    bool cpuLoaded, disposed;
     float[] embed = []; readonly int predH, vocab, blank; readonly int[] durations; readonly int maxSymbols;
     Q8Weights[] ih = [], hh = []; Q8Weights? jointEnc, jointPred, jointOut;
     readonly string[] pieces;
@@ -169,6 +169,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 
     public void Dispose()
     {
+        disposed = true;
         gpu?.Dispose();
         gpu = null;
         DropTheCpuWeightsSoAnyoneStillHoldingThisModelCannotKeepThemAlive();
@@ -187,6 +188,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 
     public string Transcribe(float[] audio16KhzMono, out TranscribeProfile profile)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         if (audio16KhzMono.Length == 0)
         {
             profile = default;
@@ -217,6 +219,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
             catch (Exception ex) when (IsGpuDeviceLost(ex))
             {
                 RetireGpu();
+                LoadCpuWeightsIfMissing();
                 t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             }
         }
