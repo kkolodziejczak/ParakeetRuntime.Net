@@ -40,9 +40,10 @@ runs as whole `int` words.
   packing needs no second copy. Otherwise packing writes into new arrays, where the last partial
   group is padded with zero scales (and a zero bias).
 - The portable path keeps plain rows.
-- Every method and lambda that runs per frame or per weight on the CPU path (kernels, quantizing,
-  attention, mel, subsampling, the decoder, packing) carries `AggressiveOptimization`, so the JIT
-  compiles it fully the first time. With default tiering they started as unoptimized Tier0 code
+- The methods and lambdas that do the per-frame or per-weight work on the CPU path (kernels,
+  quantizing on both the AVX2 and the 128-bit path, attention, mel, subsampling, the decoder,
+  packing) carry `AggressiveOptimization`, so the JIT compiles them fully the first time; thin
+  lambdas that only call such a method are left alone. With default tiering they started as unoptimized Tier0 code
   and were recompiled during the first utterances: the first CPU transcription in a process compiled
   455–605 methods and took 37–56% longer than later ones. The cost is losing profile-guided
   recompilation, which does little for these straight SIMD loops.

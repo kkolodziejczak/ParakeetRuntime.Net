@@ -83,7 +83,10 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private GpuBuffer? bufX, bufA, bufB, bufWide, bufEncProj;
     private GpuBuffer? decTokens, decTokensRb;
     private const int MostFramesReadingTheCachedPositions = 251;
+    private const ulong SmallStagingQBytes = 16UL * 1024 * 1024;
+    private const int QkvTensorsStagedTogether = 3;
     private GpuBuffer? projectedPositionsUpTo20s;
+    private bool positionsCanBeCached;
     private ulong ProjectedPositionsBytesPerLayer => (ulong)(2 * MostFramesReadingTheCachedPositions - 1) * (ulong)d * 4;
 
     private readonly GpuBuffer[] decH, decC;
@@ -114,6 +117,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         this.ff = ff;
         this.kernel = kernel;
         this.peRows = peRows;
+        positionsCanBeCached = (peRows + 1) / 2 >= MostFramesReadingTheCachedPositions;
         this.jointDim = jointDim;
         this.melBins = melBins;
         this.subCh = subCh;
@@ -325,8 +329,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             wdMega = gpu.CreateDefaultBuffer(totalD, allowUav: false);
             floatMega = gpu.CreateDefaultBuffer(totalF, allowUav: false);
 
-            const ulong stageQCap = 16UL * 1024 * 1024;
-            const ulong stageDCap = 2UL * 1024 * 1024;
+            ulong stageQCap = Math.Max(SmallStagingQBytes, D3D12Device.Align256((ulong)(QkvTensorsStagedTogether * g.LargestQ8TensorValues)));
+            ulong stageDCap = stageQCap / 8;
             using var firstStageQ = gpu.CreateUploadBuffer(stageQCap);
             using var firstStageD = gpu.CreateUploadBuffer(stageDCap);
             using var secondStageQ = gpu.CreateUploadBuffer(stageQCap);
@@ -740,8 +744,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         uint scaleBits = BitConverter.SingleToUInt32Bits(1f / MathF.Sqrt(dk));
 
         RecordSubsampling(H0, W0, H1, W1, H2, W2, H3, W3, T, curWide, curX);
-        if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is null)
-            RecordProjectedPositionsUpTo20s();
+        if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is null && positionsCanBeCached)
+            ProjectPositionsUpTo20sInTheirOwnSubmit();
 
         double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         int startLayer = 0;
@@ -905,7 +909,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         RecordLayerNorm(curX, curA, l.NAttg, l.NAttb, T);
         RecordQ8Gemm(curA, 0, curWide, T, l.Qkv, GpuEpilogue.Store);
-        if (T <= MostFramesReadingTheCachedPositions)
+        if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is not null)
         {
             ulong rowOfPositionTMinus1 = (ulong)(MostFramesReadingTheCachedPositions - T);
             RecordAttention(curWide, projectedPositionsUpTo20s!, (ulong)layerIndex * ProjectedPositionsBytesPerLayer + rowOfPositionTMinus1 * (ulong)d * 4, curA, l.U, l.V, T, scaleBits);
@@ -1219,16 +1223,29 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         catch (Exception) { return 0; }
     }
 
-    private void RecordProjectedPositionsUpTo20s()
+    private void ProjectPositionsUpTo20sInTheirOwnSubmit()
     {
+        GpuBuffer table;
+        try
+        {
+            table = gpu.CreateDefaultBuffer((ulong)layers.Length * ProjectedPositionsBytesPerLayer, allowUav: true);
+        }
+        catch (Exception ex) when (ex is OutOfMemoryException or System.Runtime.InteropServices.COMException)
+        {
+            positionsCanBeCached = false;
+            return;
+        }
+        gpu.ExecuteAndWait();
+        gpu.BeginCommands();
         int rows = 2 * MostFramesReadingTheCachedPositions - 1;
         uint firstRowByteOffset = (uint)((long)((peRows + 1) / 2 - MostFramesReadingTheCachedPositions) * d * 4);
-        var table = gpu.CreateDefaultBuffer((ulong)layers.Length * ProjectedPositionsBytesPerLayer, allowUav: true);
         gpu.Transition(table, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         for (int i = 0; i < layers.Length; i++)
             DispatchQ8Gemm(floatMega, peOffset, firstRowByteOffset, table, rows, layers[i].Pos, GpuEpilogue.Store, (ulong)i * ProjectedPositionsBytesPerLayer);
         gpu.Transition(table, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         projectedPositionsUpTo20s = table;
+        gpu.ExecuteAndWait();
+        gpu.BeginCommands();
     }
 
     private void RecordAttention(GpuBuffer qkv, GpuBuffer posP, ulong posByteOffset, GpuBuffer ctx, ulong uOff, ulong vOff, int T, uint scaleBits)

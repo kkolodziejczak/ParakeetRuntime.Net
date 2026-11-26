@@ -1,6 +1,7 @@
 // Part of ParakeetRuntime.Net; a C# port of NeMo-Speech.cpp (Apache-2.0), see THIRD-PARTY-NOTICES.md.
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -44,9 +45,9 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 
     private ParakeetModel(string path, Int8Path int8Path, bool allowGpu, string? adapterNameFilter)
     {
-        modelPath = path;
+        modelPath = Path.GetFullPath(path);
         this.int8Path = int8Path;
-        using var g = new Gguf(path);
+        using var g = new Gguf(modelPath);
         mel = new Mel(g);
         d = g.Int("asr.encoder.d_model"); heads = g.Int("asr.encoder.n_heads"); dk = d / heads;
         ff = g.Int("asr.encoder.d_ff"); kernel = g.Int("asr.encoder.conv_kernel_size");
@@ -83,7 +84,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         subOut = WithBias(g, "encoder.pre_encode.out");
         jointEnc = WithBias(g, "joint.enc"); jointPred = WithBias(g, "joint.pred"); jointOut = WithBias(g, "joint.joint_net.2");
         layers = new Layer[layersN];
-        Parallel.For(0, layersN, new ParallelOptions { MaxDegreeOfParallelism = Kernels.ThreadCount }, () => new Gguf(modelPath), (i, _, layerReader) =>
+        WithTheFirstFailureUnwrapped(() => Parallel.For(0, layersN, new ParallelOptions { MaxDegreeOfParallelism = Kernels.ThreadCount }, () => new Gguf(modelPath), (i, _, layerReader) =>
         {
             string p = $"encoder.layers.{i}.";
             var l = layers[i] = new Layer
@@ -107,7 +108,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
             for (int c = 0; c < d; c++) { l.bnScale[c] = w[c] / MathF.Sqrt(var[c] + 1e-5f); l.bnShift[c] = b[c] - mean[c] * l.bnScale[c]; }
             (l.projectedPositionsUpTo20s, l.projectedPositionsUpTo20sStride) = ProjectPositions(l, TwentySecondsOfEncoderFrames);
             return layerReader;
-        }, layerReader => layerReader.Dispose());
+        }, layerReader => layerReader.Dispose()));
         embed = g.Floats("decoder.prediction.embed.weight");
         ih = new Q8Weights[predLayers]; hh = new Q8Weights[predLayers];
         for (int i = 0; i < predLayers; i++)
@@ -118,15 +119,30 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         cpuLoaded = true;
     }
 
-    private void RetireGpuAndContinueOnCpu()
+    static void WithTheFirstFailureUnwrapped(Action loadInParallel)
+    {
+        try
+        {
+            loadInParallel();
+        }
+        catch (AggregateException failure)
+        {
+            ExceptionDispatchInfo.Throw(failure.Flatten().InnerExceptions[0]);
+        }
+    }
+
+    private void RetireGpu()
     {
         gpu?.Dispose();
         gpu = null;
-        if (!cpuLoaded)
-        {
-            using var g = new Gguf(modelPath);
-            LoadCpuWeights(g);
-        }
+    }
+
+    private void LoadCpuWeightsIfMissing()
+    {
+        if (cpuLoaded)
+            return;
+        using var g = new Gguf(modelPath);
+        LoadCpuWeights(g);
     }
 
     static float[] Transpose(float[] a, int rows) => Kernels.Transpose(a, rows, a.Length / rows, rows);
@@ -200,10 +216,11 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
             }
             catch (Exception ex) when (IsGpuDeviceLost(ex))
             {
-                RetireGpuAndContinueOnCpu();
+                RetireGpu();
                 t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             }
         }
+        LoadCpuWeightsIfMissing();
         BenchmarkClock?.Start();
         var feats = mel.Compute(audio16KhzMono, out int frames);
         BenchmarkClock?.Lap("mel");

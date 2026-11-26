@@ -91,9 +91,11 @@ The `dw_striding` subsampling reduces the frame rate 8 times:
 
 The front end makes `n / hop + 1` frames for `n` samples, and the last one is zeroed
 (`Mel.ZeroedLastFrames`), so `n / hop` frames are valid. Like NeMo, the encoder runs on
-`ceil(valid / 8)` frames (`ParakeetModel.EncoderFramesOfValidMelFrames`, on the CPU and the GPU),
-not on all the frames the three stride-2 convolutions produce. The two differ by one when the valid
-count is a multiple of 8, about one clip in eight, and the extra frame came only from padding. On
+`ceil(valid / 8)` frames (`ParakeetModel.EncoderFramesOfValidMelFrames`, on the CPU and the GPU,
+and at least one, so audio shorter than one hop still gets a frame), not on all the frames the
+three stride-2 convolutions produce. The two differ by one when the valid count is a multiple of
+8, about one clip in eight; the extra frame is centred on the zeroed last mel frame, though its
+receptive field also reaches the last valid ones. On
 the 300 FLEURS clips of 20 s or less (2026-11-26, laptop MX450) dropping it changed 6 transcripts:
 WER 5.97 → 5.90% in English and 6.64 → 6.60% in Polish.
 
@@ -198,10 +200,11 @@ are removed. The result keeps the punctuation and capitals the model writes.
   the subsampling and one for the encoder layers, kept from one utterance to the next. Within an
   utterance a slot holds the same buffer for every layer, so a rented buffer still holds whatever
   the previous layer left in it. The first rent of a slot in an utterance zero-fills the requested
-  length, so every utterance starts as it would with fresh arrays (the attention's key runs rely on
-  zero padding). A slot only grows, so a buffer can be longer than requested; code uses the
-  lengths it was given, never `.Length`. After an utterance over 20 s, and on `Dispose`, the
-  model drops both scratches, so a long call doesn't pin its larger buffers. A CPU transcription
+  length, so every utterance starts exactly as it would with fresh arrays, padding included. A
+  slot only grows, so a buffer can be longer than requested; code uses the lengths it was given,
+  never `.Length`. After an utterance longer than the 20 s position table (more than 251 encoder
+  frames), and on `Dispose`, the model drops both scratches, so a long call doesn't pin its larger
+  buffers; a call that fails keeps them until the next long call or `Dispose`. A CPU transcription
   of 10 s allocates about 66 MB without the reuse and under 8 MB with it.
 - When the GPU fails with a lost device (a GPU timeout reset, a driver reset or running out of video
   memory, seen as `COMException`, `InvalidOperationException` or `OutOfMemoryException`), the
@@ -220,10 +223,11 @@ are removed. The result keeps the punctuation and capitals the model writes.
   costs a few milliseconds. A CPU load gets the background collection instead, because compacting
   would move 780 MB of weights.
 - After each transcription that ran on the CPU, the engine starts a background full garbage
-  collection, which doesn't block the caller. The CPU path's buffers for one utterance are large
-  objects, and the 860 MB of managed weights let the runtime put off a full collection for many
-  utterances, so without it the working set grows by about the size of those buffers per utterance.
-  GPU transcriptions allocate almost nothing managed and skip it.
+  collection, which doesn't block the caller. The arrays an utterance still allocates (the mel
+  features, the encoder's joint projection, the pieces of long audio) are large objects, and the
+  860 MB of managed weights let the runtime put off a full collection for many utterances, so
+  without it the working set would grow by their size per utterance. GPU transcriptions allocate
+  almost nothing managed and skip it.
 
 ## Model install and verification
 

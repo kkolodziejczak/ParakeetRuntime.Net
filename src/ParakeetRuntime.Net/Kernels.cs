@@ -111,6 +111,7 @@ internal static unsafe class Kernels
     static Vector256<int> RoundToInt(Vector256<float> x, Vector256<float> inverse) =>
         Avx.ConvertToVector256Int32WithTruncation(Avx.RoundToNearestInteger(Avx.Multiply(x, inverse)));
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void LargestMagnitudes128(float* x, int blocks, float* largest)
     {
         for (int b = 0; b < blocks; b++, x += 32)
@@ -123,6 +124,7 @@ internal static unsafe class Kernels
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     static void Round128(float* x, int blocks, float* inverses, sbyte* q, int* sums)
     {
         for (int block = 0; block < blocks; block++, x += 32, q += 32)
