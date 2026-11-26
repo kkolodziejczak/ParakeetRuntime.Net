@@ -149,6 +149,15 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     {
         gpu?.Dispose();
         gpu = null;
+        DropTheCpuWeightsSoAnyoneStillHoldingThisModelCannotKeepThemAlive();
+    }
+
+    private void DropTheCpuWeightsSoAnyoneStillHoldingThisModelCannotKeepThemAlive()
+    {
+        pe = []; embed = []; layers = []; ih = []; hh = [];
+        c0wByTap = c0b = c2wByTap = c2b = c3wT = c3b = c5wByTap = c5b = c6wT = c6b = [];
+        subOut = jointEnc = jointPred = jointOut = null;
+        cpuLoaded = false;
     }
 
     public string Transcribe(float[] audio16KhzMono) => Transcribe(audio16KhzMono, out _);

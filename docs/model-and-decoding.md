@@ -196,7 +196,9 @@ are removed. The result keeps the punctuation and capitals the model writes.
 - Disposing a `SpeechEngine` drops its model and runs one aggressive, compacting full garbage
   collection. The CPU weights are managed arrays, and without that collection they would stay in
   the process until some later full collection, which an idle application may not run for a long
-  time.
+  time. The model also drops its own weight arrays when disposed: a caller that disposes in the
+  continuation of an awaited transcription still holds the model on its stack (in the awaited call's
+  state), and the collection would otherwise find the 780 MB of CPU weights still reachable.
 - After each transcription that ran on the CPU, the engine starts a background full garbage
   collection, which doesn't block the caller. The CPU path's buffers for one utterance are large
   objects, and the 860 MB of managed weights let the runtime put off a full collection for many

@@ -83,3 +83,26 @@ public sealed class SpeechEngineTests
         return (new SpeechEngine(model), new WeakReference(model));
     }
 }
+
+[CollectionDefinition(nameof(AloneSoOtherTestsDoNotMoveTheManagedHeap), DisableParallelization = true)]
+public sealed class AloneSoOtherTestsDoNotMoveTheManagedHeap;
+
+[Collection(nameof(AloneSoOtherTestsDoNotMoveTheManagedHeap))]
+public sealed class SpeechEngineMemoryTests
+{
+    private const long MoreThanHalfOfTheCpuWeights = 400L << 20;
+
+    [InstalledModelFact]
+    public async Task Disposing_returns_the_cpu_weights_even_while_something_still_references_the_model()
+    {
+        var model = new ParakeetModel(SpeechModel.Default().Path, allowGpu: false);
+        var engine = new SpeechEngine(model);
+        await engine.TranscribeAsync(new float[16_000]);
+        var whileLoaded = GC.GetTotalMemory(forceFullCollection: true);
+
+        engine.Dispose();
+
+        Assert.True(whileLoaded - GC.GetTotalMemory(forceFullCollection: true) > MoreThanHalfOfTheCpuWeights);
+        GC.KeepAlive(model);
+    }
+}
