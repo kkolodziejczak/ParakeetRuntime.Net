@@ -11,10 +11,10 @@ Q8 GEMM per encoder shape) and `scripts/Run-Matrix.ps1` (the full device × lang
 matrix against NeMo-Speech.cpp). How to run them is in
 [benchmarks-howto.md](benchmarks-howto.md).
 
-The records up to 2026-11-23 come from the engine's history in LocalBuddy, where the
-benchmark was `LocalBuddy.Spike`; their commits are LocalBuddy commits, and each number is
-copied as its commit message or pull request states it. Records from then on name
-ParakeetRuntime commits.
+The records up to 2026-11-23 were measured before the engine moved into this repository. Their
+commits, marked LocalBuddy, belong to that earlier history and do not exist here; each number is
+copied as its commit message or pull request states it. Records from then on name commits in this
+repository.
 
 RTF is the real-time factor: processing time ÷ audio length, so lower is faster. "Best of N" is
 the best pass of N timed passes after one untimed warm-up.
