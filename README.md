@@ -35,19 +35,19 @@ is needed.
 3. Drop a WAV file on the page. Its text appears with the time it took, a **Copy text** button and the
    `curl` command that does the same.
 
-From a terminal:
+From a terminal in the unzipped folder:
 
 ```powershell
-parakeet-runtime download                 # installs the model once
-parakeet-runtime transcribe hello.wav     # prints the text
-parakeet-runtime record                   # records the default microphone until Enter, prints the text
-parakeet-runtime serve --no-browser       # the page and the HTTP API, without opening the browser
+.\parakeet-runtime.exe download                 # installs the model once
+.\parakeet-runtime.exe transcribe hello.wav     # prints the text
+.\parakeet-runtime.exe record                   # records the default microphone until Enter (at most 10 minutes), prints the text
+.\parakeet-runtime.exe serve --no-browser       # the page and the HTTP API, without opening the browser
 curl.exe -F file=@hello.wav http://127.0.0.1:5092/v1/audio/transcriptions
 ```
 
 Write `curl.exe`, not `curl`: in Windows PowerShell 5.1, `curl` is another command. `transcribe`, `record`
 and `serve` take `--device cpu`, `gpu` or `gpu:<part of the adapter's name>`; without it, a usable GPU is
-chosen, else the processor. `parakeet-runtime --help` lists everything.
+chosen, else the processor. `.\parakeet-runtime.exe --help` lists everything.
 
 ## Use it in your app
 
@@ -68,19 +68,20 @@ using var engine = await SpeechEngine.LoadAsync(model);
 string text = await engine.TranscribeWavAsync("hello.wav");
 ```
 
-Record from the microphone, then transcribe:
+Record from the microphone, then transcribe with the same engine:
 
 ```csharp
 using var recording = Microphone.StartRecording();      // Windows' default microphone; Microphone.Devices() lists the others
 Console.ReadLine();
 float[] samples = recording.Stop();                     // 16 kHz mono
-string text = await engine.TranscribeAsync(samples);
+string spoken = await engine.TranscribeAsync(samples);
 ```
 
 - **Your own audio:** `TranscribeAsync(float[])` takes 16 kHz mono samples in the range -1 to 1, of any
   length.
 - **CPU or GPU:** `SpeechEngine.LoadAsync(model, new SpeechEngineOptions(UseGpu: false))` stays on the
-  processor; `GpuNameContains: "RTX"` picks one graphics card. `engine.Backend` says where the model runs,
+  processor; `GpuNameContains: "RTX"` prefers the graphics card whose name contains "RTX", and falls back to the processor
+  when no such card is usable. `engine.Backend` says where the model runs,
   and `engine.IsUsingGpu` whether that is a GPU.
 - **The model folder and offline installs:** `new SpeechModel(folder, SpeechModel.Parakeet)` keeps the model
   elsewhere. `model.InstallFromFileAsync(path, progress, cancellationToken)` installs a copy you downloaded
@@ -106,11 +107,12 @@ string text = await engine.TranscribeAsync(samples);
   | --- | --- | --- | --- |
   | Seconds of work per minute of audio | 3.4–3.6 s | 1.4 s | 5.9 s |
   | Words wrong (word error rate) | 6.0–6.7% | 6.0–6.6% | 6.0–6.6% |
-  | Loading the model | 1.5–2.7 s | 3.7–8.8 s | 3.7–8.8 s |
+  | Loading the model | 1.5–2.7 s | 3.7–8.8 s, both GPUs together | |
 
-  On a desktop (Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti), measured 2026-11-23, the RTX took
-  under 0.2 s and the processor 0.9–1.6 s per minute of audio. Long audio, cut into pieces, gave 5.9–6.3%
-  wrong words (2026-11-24). Every measurement, with its machine and command, is in
+  On a desktop (Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti), measured 2026-11-23 on the same
+  model and FLEURS Polish and English clips of 20 s to 2 minutes, the RTX took under 0.2 s and the processor
+  0.9–1.6 s per minute of audio. FLEURS clips joined into files of about 60 and 120 s, cut into pieces, gave
+  5.9–6.3% wrong words (2026-11-24). Every measurement, with its machine and command, is in
   [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
 
 ## How it works
@@ -119,12 +121,12 @@ string text = await engine.TranscribeAsync(samples);
 2. **Features:** each piece becomes a log-mel spectrogram, 128 bands every 10 ms.
 3. **Encoder:** a 24-layer FastConformer turns the spectrogram into one vector per 80 ms. This is most of the
    work: on the processor it runs int8 matrix kernels (AVX-VNNI-INT8, AVX-VNNI or AVX2, the fastest the CPU
-   has, and plain 128-bit vectors on CPUs without AVX2) on its fast cores; on a GPU it runs as Direct3D 12 compute shaders.
+   has, and plain 128-bit vectors on CPUs without AVX2) with one thread per fast core; on a GPU it runs as Direct3D 12 compute shaders.
 4. **Decoder:** TDT greedy decoding picks the next word piece, and how many frames to skip, until the audio
    ends. The pieces become text with punctuation and capitals.
 
-The model's weights stay in the GGUF file's Q8_0 form (8-bit blocks) in memory, on the processor or the
-graphics card, instead of being expanded to floating point. The details are in
+The large matrices stay 8-bit in memory, as in the GGUF file: int8 values with one scale per block of 32, on
+the processor or the graphics card. Norms, biases and the small tables are floating point. The details are in
 [docs](https://github.com/kkolodziejczak/ParakeetRuntime.Net/tree/master/docs).
 
 ## HTTP API
@@ -138,15 +140,15 @@ the network. `--port` changes the port.
 | `GET /health` | `{"status","progress","version","backend","model","error"}`. `status` is `no-model`, `downloading`, `loading`, `ready` or `failed`. HTTP 200 when ready, 503 otherwise. |
 | `POST /v1/audio/transcriptions` | `multipart/form-data` with one `file` part holding a WAV, and optionally `response_format=text`. Answers `{"text":"…","duration":17.54}` (seconds of audio), or the plain text. Other fields are ignored, so OpenAI-style clients work. |
 
-Errors answer `{"error":{"code","message"}}`:
+A transcription request that fails answers `{"error":{"code","message"}}`:
 
 | Status | When |
 | --- | --- |
 | 400 | The request or the WAV is malformed. |
 | 403 | The request came from another web page. |
-| 408 | The upload took longer than one minute. |
-| 413 | The upload is over 256 MiB. |
-| 415 | The file is not a WAV, or its encoding is not supported. |
+| 408 | The request body did not arrive within one minute of its turn starting. |
+| 413 | The request body is over 256 MiB. |
+| 415 | The request is not `multipart/form-data`, the file is not a WAV, or its encoding is not supported. |
 | 421 | The request used another address than `127.0.0.1:<port>`, for example `localhost`. |
 | 422 | The audio is longer than 10 minutes. |
 | 503 | The model is not ready, or one transcription runs and another already waits. |
@@ -157,14 +159,14 @@ to disk.
 
 ## The speech model
 
-The model is not included. The page, `parakeet-runtime download` and `SpeechModel.EnsureInstalledAsync`
+The model is not included. The page, `parakeet-runtime.exe download` and `SpeechModel.EnsureInstalledAsync`
 download it once and check it:
 [`parakeet-tdt-0.6b-v3.q8_0.gguf`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf).
 Its SHA-256 must be `e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e`. The model
 is © NVIDIA, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 On a computer without internet access, copy the file over and install it with
-`parakeet-runtime download --from <file>`, or `SpeechModel.InstallFromFileAsync`. Both check it the same way.
+`.\parakeet-runtime.exe download --from <file>`, or `SpeechModel.InstallFromFileAsync`. Both check it the same way.
 
 Load only model files you trust: a GGUF file is input to the engine like any other file.
 
@@ -185,8 +187,8 @@ may still warn while the certificate builds reputation. Download only from this 
 ## Requirements
 
 - Windows 10 or 11, 64-bit, on an x86-64 processor.
-- For the GPU path, a graphics card or integrated graphics with Direct3D 12 support. Without
-  one, the engine runs on the processor.
+- For the GPU path, a graphics card or integrated graphics with Direct3D 12 support and a video memory
+  budget of at least 900 MiB, as Windows reports it. Without one, the engine runs on the processor.
 - For the NuGet package, .NET 10. Target `net10.0-windows`, or the build warns that the API is
   Windows-only.
 

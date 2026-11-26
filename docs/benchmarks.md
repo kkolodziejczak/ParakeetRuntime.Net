@@ -978,6 +978,7 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
 | | Plain | Compressed |
 | --- | --- | --- |
 | Exe size | 99.9 MB | 48.4 MB |
+| Release zip (`Compress-Archive -CompressionLevel Optimal`, as `release.yml` makes it), measured later the same day | 45.0 MB | 45.2 MB |
 | `--version`, first run | 235 ms | 250 ms |
 | `--version`, median of the next 6 | 72 ms | 142 ms |
 | `serve` answering `/health` | 0.6–0.7 s | 0.6–0.8 s |
@@ -986,6 +987,11 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
 | Working set when ready, CPU | 889–891 MB | 943–944 MB |
 | Working set when ready, MX450 | 719–855 MB | 775–909 MB |
 
-- Compression was kept (owner's decision): the download halves, model load is no slower, and each start costs
-  about 70 ms and 30–55 MB more. The council's prototype measured 103.6 → 50.3 MB.
+- The download does not shrink: the release zip already compresses the plain exe as well. Only the unzipped
+  exe on disk halves. Model load is no slower. The first `--version` run took 15 ms more, later runs about
+  70 ms more; the server and model-ready times overlap. The process uses 30–55 MB more once the model is ready.
+- The council's prototype measured 103.6 → 50.3 MB for its own Kestrel build of the exe (2026-11-23,
+  Core Ultra 7 270K Plus); its zip was not measured.
+- Compression is passed on the release publish command (`Build-Release.ps1`), not set in the project, because
+  a framework-dependent single-file publish fails with it (NETSDK1176).
 - Signing a compressed exe is not checked here; the first signed release run checks it.
