@@ -654,7 +654,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         int H1 = (H0 - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1;
         int H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
         int H3 = (H2 - 1) / 2 + 1, W3 = (W2 - 1) / 2 + 1;
-        int T = H3;
+        int T = ParakeetModel.EncoderFramesOfValidMelFrames(H3, valid);
         if (T <= 0)
         {
             encMs = decMs = 0;
@@ -708,7 +708,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         int H1 = (H0 - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1;
         int H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
         int H3 = (H2 - 1) / 2 + 1, W3 = (W2 - 1) / 2 + 1;
-        int T = H3;
+        int T = ParakeetModel.EncoderFramesOfValidMelFrames(H3, frames - Mel.ZeroedLastFrames);
         if (T <= 0)
         {
             encMs = decMs = 0;

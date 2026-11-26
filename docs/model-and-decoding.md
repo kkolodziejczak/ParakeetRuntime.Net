@@ -89,6 +89,14 @@ The `dw_striding` subsampling reduces the frame rate 8 times:
 3. Per frame, the features are flattened channel by channel (`c * W + w`) and projected to
    `d_model` by `pre_encode.out`.
 
+The front end makes `n / hop + 1` frames for `n` samples, and the last one is zeroed
+(`Mel.ZeroedLastFrames`), so `n / hop` frames are valid. Like NeMo, the encoder runs on
+`ceil(valid / 8)` frames (`ParakeetModel.EncoderFramesOfValidMelFrames`, on the CPU and the GPU),
+not on all the frames the three stride-2 convolutions produce. The two differ by one when the valid
+count is a multiple of 8, about one clip in eight, and the extra frame came only from padding. On
+the 300 FLEURS clips of 20 s or less (2026-11-26, laptop MX450) dropping it changed 6 transcripts:
+WER 5.97 → 5.90% in English and 6.64 → 6.60% in Polish.
+
 The CPU path keeps activations as `[time][frequency][channel]`, with channels in SIMD vectors,
 convolution taps as `[tap][channel]` and pointwise weights transposed to `[in][out]`. The 3×3 sums
 add in the same order as plain loops would. Conv 0's output is never built whole: it is computed

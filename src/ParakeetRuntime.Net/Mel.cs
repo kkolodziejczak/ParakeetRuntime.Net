@@ -65,6 +65,8 @@ internal sealed class Mel
         return packed;
     }
 
+    public const int ZeroedLastFrames = 1;
+
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public float[] Compute(float[] audio, out int frames)
     {
@@ -73,7 +75,7 @@ internal sealed class Mel
         for (int i = 0; i < n; i++) padded[nFft / 2 + i] = i == 0 ? audio[0] : audio[i] - preemph * audio[i - 1];
         frames = (padded.Length - nFft) / hop + 1;
         var feats = new float[frames * nMels];
-        int woff = (nFft - win) / 2, valid = Math.Min(n / hop, frames), nf = frames;
+        int woff = (nFft - win) / 2, valid = frames - ZeroedLastFrames, nf = frames;
         Kernels.ForRanges(frames, [MethodImpl(MethodImplOptions.AggressiveOptimization)] (start, end) =>
         {
             var re = new double[nFft]; var im = new double[nFft]; var power = new float[nBins];

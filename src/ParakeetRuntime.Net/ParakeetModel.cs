@@ -136,6 +136,9 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     Q8Weights WithBias(Gguf g, string name) => Kernels.Pack(g.Q8(name + ".weight"), g.Floats(name + ".bias"), int8Path);
 
     const int SubsamplingFactor = 8;
+
+    internal static int EncoderFramesOfValidMelFrames(int subsampledFrames, int validMelFrames) =>
+        Math.Max(1, Math.Min(subsampledFrames, (validMelFrames + SubsamplingFactor - 1) / SubsamplingFactor));
     const double MelFramesPerSecond = 100.0;
 
     public TimeSpan MaxAudio => TimeSpan.FromSeconds((peRows + 1) / 2 * SubsamplingFactor / MelFramesPerSecond - 1);
@@ -208,7 +211,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         float[] x;
         int T;
         using (subsamplingScratch.BeginUtterance())
-            x = SubsampleDwStriding(feats, frames, out T);
+            x = SubsampleDwStriding(feats, frames, frames - Mel.ZeroedLastFrames, out T);
         BenchmarkClock?.Lap("subsampling");
         var t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         using (encoderScratch.BeginUtterance())
@@ -239,7 +242,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
     static bool IsGpuDeviceLost(Exception ex) => ex is COMException or InvalidOperationException or OutOfMemoryException;
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    float[] SubsampleDwStriding(float[] feats, int frames, out int T)
+    float[] SubsampleDwStriding(float[] feats, int frames, int validFrames, out int T)
     {
         int W0 = mel.Mels, C = subCh;
         int H1 = (frames - 1) / 2 + 1, W1 = (W0 - 1) / 2 + 1, H2 = (H1 - 1) / 2 + 1, W2 = (W1 - 1) / 2 + 1;
@@ -275,7 +278,7 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
         });
         var a = EncoderScratch.Rent(H3 * W3 * C);
         Kernels.GemmReluInto(y2, H3 * W3, c6wT, C, C, c6b, a);
-        T = H3;
+        T = EncoderFramesOfValidMelFrames(H3, validFrames);
         var channelMajorFrames = EncoderScratch.Rent(T * C * W3);
         for (int t = 0; t < T; t++) for (int w = 0; w < W3; w++) for (int c = 0; c < C; c++) channelMajorFrames[t * C * W3 + c * W3 + w] = a[(t * W3 + w) * C + c];
         return Kernels.Linear(channelMajorFrames, T, subOut!);
