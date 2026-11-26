@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>ParakeetRuntime.Net</PackageId>
+    <Description>Speech-to-text for NVIDIA Parakeet TDT models in GGUF format, written in C#: int8 CPU kernels and a Direct3D 12 GPU path. Runs offline on Windows.</Description>
+    <PackageTags>parakeet;speech-recognition;speech-to-text;asr;gguf;nvidia;nemo;offline;direct3d12</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/kkolodziejczak/ParakeetRuntime.Net</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ParakeetRuntime.Net.Tests" />
+    <InternalsVisibleTo Include="parakeet-runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Shaders\*.hlsl" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TestableIO.System.IO.Abstractions.Wrappers" Version="23.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

@@ -29,12 +29,12 @@ details.
 - A GGUF model file is input that the engine parses and reads weights from. Load only model files
   from sources you trust, and check their SHA-256 against the published value.
 - Download `parakeet-runtime.exe` and the package only from this repository's
-  [Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases) or the `ParakeetRuntime`
+  [Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases) or the `ParakeetRuntime.Net`
   package on nuget.org. Releases are signed by **Open Source Developer Krzysztof Kołodziejczak**
   (Certum); do not run a file whose signature is missing or names someone else.
 - Transcription runs locally and opens no network connections. The only network call is
   `SpeechModel.DownloadAsync`, which fetches the pinned model from Hugging Face when an application
   calls it, through the `HttpClient` that application passes in.
 
-This policy covers ParakeetRuntime. Report problems in .NET, Windows, graphics drivers, or the
+This policy covers ParakeetRuntime.Net. Report problems in .NET, Windows, graphics drivers, or the
 NVIDIA models to their own vendors.

@@ -27,7 +27,7 @@ body:
       label: How you use it
       options:
         - parakeet-runtime.exe from a release
-        - ParakeetRuntime NuGet package
+        - ParakeetRuntime.Net NuGet package
         - Source build
     validations:
       required: true

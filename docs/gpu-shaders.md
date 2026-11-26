@@ -2,7 +2,7 @@ This document describes what the decoder, encoder, subsampling and mel HLSL shad
 
 # GPU shaders
 
-The shaders live in `src/ParakeetRuntime/Shaders/` as embedded resources. `D3D12Device` compiles
+The shaders live in `src/ParakeetRuntime.Net/Shaders/` as embedded resources. `D3D12Device` compiles
 each entry point at run time through the inbox `d3dcompiler_47.dll`, for shader model 5.1
 (`cs_5_1`) at optimization level 3. The host refers to entry points by their string names, so an
 entry point must never be renamed.
@@ -219,7 +219,7 @@ same values a butterfly would compute inline, so the table changes no result.
 
 ## What the GPU tests pin
 
-`tests/ParakeetRuntime.Tests/D3D12KernelsTests.cs` compares each shader with a CPU reference on
+`tests/ParakeetRuntime.Net.Tests/D3D12KernelsTests.cs` compares each shader with a CPU reference on
 every eligible hardware adapter, and skips when there is none.
 
 - Q8 GEMM (`Q8GemmMain` with 64-row tiles, `Q8GemmSmallMain` with 32-row tiles): the cases cover

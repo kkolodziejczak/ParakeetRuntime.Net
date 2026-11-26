@@ -1,6 +1,6 @@
 # Support
 
-ParakeetRuntime is a community-maintained open-source project. Support is best-effort, through
+ParakeetRuntime.Net is a community-maintained open-source project. Support is best-effort, through
 this GitHub repository.
 
 ## Start here

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Not "ParakeetRuntime.Net": the exe's own assembly would collide with the library's ParakeetRuntime.Net.dll. -->
+    <AssemblyName>parakeet-runtime</AssemblyName>
+    <RootNamespace>ParakeetRuntime.Net.Cli</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Page.html" LogicalName="ParakeetRuntime.Net.Cli.Page.html" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ParakeetRuntime.Net\ParakeetRuntime.Net.csproj" />
+    <InternalsVisibleTo Include="ParakeetRuntime.Net.Tests" />
+  </ItemGroup>
+
+  <!-- The server is Kestrel on loopback only; the IIS in-process module would ship as a second file next to the exe. -->
+  <Target Name="LeaveOutTheIisModule" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'aspnetcorev2_inprocess.dll'" />
+    </ItemGroup>
+  </Target>
+
+</Project>

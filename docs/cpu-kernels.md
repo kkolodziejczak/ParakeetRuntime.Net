@@ -1,4 +1,4 @@
-This document explains how the CPU encoder kernels in `src/ParakeetRuntime/Kernels.cs` work and why they are built this way.
+This document explains how the CPU encoder kernels in `src/ParakeetRuntime.Net/Kernels.cs` work and why they are built this way.
 
 # CPU kernels
 
@@ -191,7 +191,7 @@ instead of a corpus run.
 
 ## Tests
 
-`tests/ParakeetRuntime.Tests/KernelsTests.cs`:
+`tests/ParakeetRuntime.Net.Tests/KernelsTests.cs`:
 
 - Quantizing is checked against the ggml formula on both the AVX2 path and the 128-bit path. The
   first block has amax 127 (scale 1), so its halves land exactly on .5 and test the rounding.

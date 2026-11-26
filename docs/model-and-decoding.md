@@ -129,7 +129,7 @@ never reaches that limit, because it cuts long audio first (see [Long audio](#lo
 
 The model drops whole sentences when one call holds long audio made of separate utterances: on
 FLEURS clips joined into files of 60 s and 120 s, English loses 30–45% of its words, in
-ParakeetRuntime and in NVIDIA's PyTorch model alike, with full or local attention. See the
+ParakeetRuntime.Net and in NVIDIA's PyTorch model alike, with full or local attention. See the
 2026-11-24 long-audio record in [benchmarks.md](benchmarks.md).
 
 `SpeechEngine.TranscribeAsync` therefore cuts (`QuietestPointCutter`):

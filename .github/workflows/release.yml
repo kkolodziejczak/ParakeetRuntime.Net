@@ -1,6 +1,6 @@
 name: Release
 
-# A version tag tests and builds parakeet-runtime.exe and the ParakeetRuntime package, signs the
+# A version tag tests and builds parakeet-runtime.exe and the ParakeetRuntime.Net package, signs the
 # exe, the DLL inside the package and the package after the owner's approval
 # (gh release-signing approve -Tag vX.Y.Z), then verifies, zips, hashes and drafts the release.
 # A manual run from a branch builds unsigned test files and never signs or releases.
@@ -78,7 +78,7 @@ jobs:
     with:
       artifact: unsigned-release
       # The exe in its folder and the library inside the package; then the package itself.
-      files: parakeet-runtime.exe;ParakeetRuntime.dll
+      files: parakeet-runtime.exe;ParakeetRuntime.Net.dll
       packages: "*.nupkg"
       signed-artifact: signed-release
       retention-days: 7
@@ -119,9 +119,9 @@ jobs:
           }
           ./scripts/Test-ReleaseArtifacts.ps1 -Version $env:VERSION -ExpectedSignerThumbprint $env:SIGNER_THUMBPRINT
           $release = "artifacts/release/$env:VERSION"
-          $zip = "$release/ParakeetRuntime-$env:VERSION-win-x64.zip"
-          Compress-Archive -LiteralPath "$release/ParakeetRuntime-$env:VERSION-win-x64" -DestinationPath $zip -CompressionLevel Optimal
-          foreach ($asset in $zip, "$release/ParakeetRuntime.$env:VERSION.nupkg") {
+          $zip = "$release/ParakeetRuntime.Net-$env:VERSION-win-x64.zip"
+          Compress-Archive -LiteralPath "$release/ParakeetRuntime.Net-$env:VERSION-win-x64" -DestinationPath $zip -CompressionLevel Optimal
+          foreach ($asset in $zip, "$release/ParakeetRuntime.Net.$env:VERSION.nupkg") {
             $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $(Split-Path -Leaf $asset)" | Set-Content -LiteralPath "$asset.sha256" -NoNewline
             Write-Host "$(Split-Path -Leaf $asset): $((Get-Item -LiteralPath $asset).Length) bytes"
@@ -130,7 +130,7 @@ jobs:
       - name: Keep the release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ParakeetRuntime-${{ needs.build.outputs.version }}
+          name: ParakeetRuntime.Net-${{ needs.build.outputs.version }}
           path: |
             artifacts/release/${{ needs.build.outputs.version }}/*.zip
             artifacts/release/${{ needs.build.outputs.version }}/*.nupkg
@@ -144,8 +144,8 @@ jobs:
         shell: pwsh
         run: |
           $release = "artifacts/release/$env:VERSION"
-          $zip = "$release/ParakeetRuntime-$env:VERSION-win-x64.zip"
-          $package = "$release/ParakeetRuntime.$env:VERSION.nupkg"
+          $zip = "$release/ParakeetRuntime.Net-$env:VERSION-win-x64.zip"
+          $package = "$release/ParakeetRuntime.Net.$env:VERSION.nupkg"
           $assets = @($zip, "$zip.sha256", $package, "$package.sha256")
           $notes = ".github/release-notes/$env:GITHUB_REF_NAME.md"
           # A rerun replaces the files of the draft it made before; a published release is never touched.
@@ -157,6 +157,6 @@ jobs:
             gh release edit $env:GITHUB_REF_NAME --notes-file $notes
           }
           else {
-            gh release create $env:GITHUB_REF_NAME @assets --draft --verify-tag --title "ParakeetRuntime $env:GITHUB_REF_NAME" --notes-file $notes
+            gh release create $env:GITHUB_REF_NAME @assets --draft --verify-tag --title "ParakeetRuntime.Net $env:GITHUB_REF_NAME" --notes-file $notes
           }
           if ($LASTEXITCODE -ne 0) { throw "Creating or updating draft release $env:GITHUB_REF_NAME failed with exit code $LASTEXITCODE." }

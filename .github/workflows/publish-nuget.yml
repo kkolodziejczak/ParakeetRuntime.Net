@@ -38,7 +38,7 @@ jobs:
           NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         run: |
           if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Release tag '$env:TAG' is not vMAJOR.MINOR.PATCH." }
-          $name = "ParakeetRuntime.$($Matches[1]).nupkg"
+          $name = "ParakeetRuntime.Net.$($Matches[1]).nupkg"
           gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern "$name.sha256" --dir release
           if ($LASTEXITCODE -ne 0) { throw "Could not download $name from release $env:TAG." }
           $expected = (Get-Content -LiteralPath "release/$name.sha256" -Raw).Split(' ')[0]

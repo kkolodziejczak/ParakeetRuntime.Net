@@ -1,6 +1,6 @@
 # Contributing to ParakeetRuntime.Net
 
-Thank you for helping improve ParakeetRuntime. Bug reports, measurements, documentation, tests and
+Thank you for helping improve ParakeetRuntime.Net. Bug reports, measurements, documentation, tests and
 code are welcome.
 
 By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). By submitting a

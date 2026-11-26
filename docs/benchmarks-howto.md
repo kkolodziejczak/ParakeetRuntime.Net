@@ -2,7 +2,7 @@
 
 How to run the corpus benchmark, the session memory check and the benchmark matrix, with every option.
 
-All three need a Release build of `parakeet-runtime.exe` (`src/ParakeetRuntime.Cli`). Without
+All three need a Release build of `parakeet-runtime.exe` (`src/ParakeetRuntime.Net.Cli`). Without
 `--model`, they use the model installed in `%LOCALAPPDATA%\ParakeetRuntime\models`.
 
 ## Corpus benchmark
@@ -25,7 +25,7 @@ whether it has enough memory for the engine.
 | --- | --- |
 | `--corpus` | A list file with one WAV path per line, or a folder of WAVs (taken in name order). Every clip must be 16 kHz mono. |
 | `--device` | Without `--nemo`: `cpu` (the default), `gpu` (the adapter the engine picks on its own), or `gpu:<part of the adapter name from --list-gpus>`. The run stops if that GPU is not used. With `--nemo`, the value is passed on to NeMo-Speech.cpp (`cpu` or `vulkan:N`). |
-| `--nemo` | Runs NeMo-Speech.cpp's `serve` command instead of ParakeetRuntime, on the same model and the same `--affinity` mask but with `--threads 1`, over its HTTP API. Its load time counts until `/ready` answers, which includes the server's own warmup. |
+| `--nemo` | Runs NeMo-Speech.cpp's `serve` command instead of ParakeetRuntime.Net, on the same model and the same `--affinity` mask but with `--threads 1`, over its HTTP API. Its load time counts until `/ready` answers, which includes the server's own warmup. |
 | `--affinity` | A hex mask of the CPUs to run on, for example `C03` for CPUs 0, 1, 10 and 11. Pick cores of one kind, so runs are comparable. |
 | `--passes` | How many times every clip is transcribed. Each pass prints its time; the best pass is the one reported in `--results`. |
 | `--out` | Writes the transcripts as a TSV of file name and text. |
@@ -47,7 +47,7 @@ What a run does and prints:
 - Each pass prints its compute time, its real-time factor (compute time divided by audio time), and
   this process's garbage-collection pauses and full collections during the pass. These pause the
   engine's threads; a NeMo-Speech.cpp server runs in its own process and is not affected.
-- After the passes, ParakeetRuntime prints where the time went. On the CPU every stage is timed
+- After the passes, ParakeetRuntime.Net prints where the time went. On the CPU every stage is timed
   (mel, subsampling, feed-forward, attention, convolution, output norm, decoder); on a GPU only the
   encoder and decoder are.
 - GPU memory is the process's dedicated and shared usage over all adapters, as Task Manager shows
@@ -107,13 +107,13 @@ powershell -File <changed checkout>\scripts\Run-Matrix.ps1 -Languages pl_pl -Len
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
-| `-Nemo` | none | Path to `nemo-speech.exe`. Without it only ParakeetRuntime runs. |
+| `-Nemo` | none | Path to `nemo-speech.exe`. Without it only ParakeetRuntime.Net runs. |
 | `-Corpus` | `%USERPROFILE%\.councils\local-parakeet-engine\fable\corpus` | The corpus root: `<language>\wav16\list.txt` with `<language>\dev.tsv`, and `<language>\<length>\list.txt` with its own `dev.tsv`. `python scripts/Build-Corpus.py [<root>]` builds it there from FLEURS dev (about 300 MB of downloads): the first 150 clips of each language converted to 16-bit WAV, and `long60` and `long120` files that join those clips with 0.5 s of silence. |
 | `-Out` | `%TEMP%\parakeet-matrix` | Where results, transcripts and logs go. |
 | `-Baseline` | none | An earlier `-Out` folder; each run is compared with the same run's transcript there instead of with NeMo-Speech.cpp on the CPU. |
 | `-Languages` | `pl_pl`, `en_us` | Corpus languages. |
 | `-Lengths` | `wav16`, `long60`, `long120` | Corpus subsets. `wav16` runs with `--max-seconds 20`. |
-| `-LocalDevices` | `gpu:RTX`, `gpu:Intel`, `cpu` | ParakeetRuntime devices; `gpu:<part of the adapter name>`. |
+| `-LocalDevices` | `gpu:RTX`, `gpu:Intel`, `cpu` | ParakeetRuntime.Net devices; `gpu:<part of the adapter name>`. |
 | `-NemoDevices` | `vulkan:0`, `vulkan:1` | NeMo-Speech.cpp devices on the same hardware, run in addition to its CPU run. |
 | `-Passes` | 3 | Passes per run; every run keeps its best pass, because long CPU runs vary between passes. |
 | `-Limit` | 0 | Only the first N clips of each corpus; 0 runs all of them. |

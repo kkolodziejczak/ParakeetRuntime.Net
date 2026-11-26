@@ -7,9 +7,9 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | Path | Purpose |
 | --- | --- |
 | `ParakeetRuntime.Net.slnx` | The solution. |
-| `src/ParakeetRuntime` | The engine library, packed as the `ParakeetRuntime` NuGet package. Plain `net10.0`, marked Windows-only. |
-| `src/ParakeetRuntime.Cli` | `parakeet-runtime.exe`, published self-contained as one file: the user commands `transcribe`, `record`, `download` and `serve` (`ConsoleCommands.cs`; the HTTP server on Kestrel, loopback only, in `LocalServer.cs` and `ModelState.cs`), and the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
-| `tests/ParakeetRuntime.Tests` | xUnit tests: kernels, GGUF reading, GPU kernels (skipped without a GPU), and the real model (skipped when it isn't installed). |
+| `src/ParakeetRuntime.Net` | The engine library, packed as the `ParakeetRuntime.Net` NuGet package. Plain `net10.0`, marked Windows-only. |
+| `src/ParakeetRuntime.Net.Cli` | `parakeet-runtime.exe`, published self-contained as one file: the user commands `transcribe`, `record`, `download` and `serve` (`ConsoleCommands.cs`; the HTTP server on Kestrel, loopback only, in `LocalServer.cs` and `ModelState.cs`; the page it serves at `/` is the embedded `Page.html`, whose script hash `Page.cs` puts in the Content-Security-Policy), and the benchmarks (`--corpus`, `--list-gpus`, `--cpu-bench`, `--gemm-bench`, `--session-memory`). |
+| `tests/ParakeetRuntime.Net.Tests` | xUnit tests: kernels, GGUF reading, GPU kernels (skipped without a GPU), and the real model (skipped when it isn't installed). |
 | `scripts/Run-Matrix.ps1` | The full speed matrix against NeMo-Speech.cpp, one run at a time, through `parakeet-runtime.exe --corpus`. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |
 | `scripts/Test-ReleaseArtifacts.ps1` | Checks those files, and their signatures when given a thumbprint. |
@@ -24,7 +24,7 @@ ships. Keep it that way, so that any `net10.0` application can reference the pac
 The engine was built in LocalBuddy and moved here on 2026-11-23 as a fresh copy of
 `kkolodziejczak/LocalBuddy` at `19d2905` (branch `perf/engine-matrix`); its history stays there.
 Its measurements are in LocalBuddy PR #3 and in that branch's commit messages. LocalBuddy will
-switch to the `ParakeetRuntime` package in its own repository. Its live and replay commands stay
+switch to the `ParakeetRuntime.Net` package in its own repository. Its live and replay commands stay
 there, because they use the app's audio capture.
 
 - The public API is `SpeechEngine`, `SpeechEngineOptions`, `SpeechModel`, `Microphone`,
@@ -101,7 +101,7 @@ dotnet test ParakeetRuntime.Net.slnx --configuration Release
 2. Push the tag `vX.Y.Z`. `release.yml` tests and builds, then waits for signing.
 3. Run `gh release-signing approve -Tag vX.Y.Z` and type the SimplySign phone code. The signing
    job (in [gh-release-signing](https://github.com/kkolodziejczak/gh-release-signing)) signs
-   `parakeet-runtime.exe`, `ParakeetRuntime.dll` inside the package, and the package, all in one
+   `parakeet-runtime.exe`, `ParakeetRuntime.Net.dll` inside the package, and the package, all in one
    approval.
 4. Review the draft release, then publish it. `publish-nuget.yml` pushes the signed package to
    nuget.org.

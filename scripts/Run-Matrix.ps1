@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Runs the corpus benchmark for ParakeetRuntime and NeMo-Speech.cpp on every device. See docs/benchmarks-howto.md for every option.
+Runs the corpus benchmark for ParakeetRuntime.Net and NeMo-Speech.cpp on every device. See docs/benchmarks-howto.md for every option.
 #>
 param(
     [string] $Nemo,
@@ -16,7 +16,7 @@ param(
     [string] $Affinity = "C03"
 )
 $ErrorActionPreference = "Stop"
-$project = Join-Path $PSScriptRoot "..\src\ParakeetRuntime.Cli"
+$project = Join-Path $PSScriptRoot "..\src\ParakeetRuntime.Net.Cli"
 $cli = Join-Path $project "bin\Release\net10.0\parakeet-runtime.exe"
 dotnet build -c Release $project | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Build failed." }

@@ -3,7 +3,7 @@
 #
 #   - the folder holds exactly parakeet-runtime.exe and its documents, and the exe starts and
 #     reports the version;
-#   - the package is ParakeetRuntime <version> with the library, its readme and the notices;
+#   - the package is ParakeetRuntime.Net <version> with the library, its readme and the notices;
 #   - with -ExpectedSignerThumbprint, the exe, the DLL inside the package and the package itself
 #     are signed by that certificate, with a timestamp.
 param(
@@ -18,9 +18,9 @@ try { Add-Type -AssemblyName System.Security.Cryptography.Pkcs } catch { Add-Typ
 
 $root = Split-Path -Parent $PSScriptRoot
 $output = Join-Path $root "artifacts\release\$Version"
-$folder = Join-Path $output "ParakeetRuntime-$Version-win-x64"
+$folder = Join-Path $output "ParakeetRuntime.Net-$Version-win-x64"
 $exe = Join-Path $folder 'parakeet-runtime.exe'
-$packagePath = Join-Path $output "ParakeetRuntime.$Version.nupkg"
+$packagePath = Join-Path $output "ParakeetRuntime.Net.$Version.nupkg"
 
 function Assert-Signed([string]$Path) {
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -43,18 +43,18 @@ if ($LASTEXITCODE -ne 0 -or $reported -notmatch "^$([regex]::Escape($Version))(\
 }
 
 $packages = @(Get-ChildItem -LiteralPath $output -Filter '*.nupkg' -File | ForEach-Object Name)
-if ($packages.Count -ne 1 -or $packages[0] -ne "ParakeetRuntime.$Version.nupkg") {
-    throw "Expected only ParakeetRuntime.$Version.nupkg in $output; found '$($packages -join "', '")'."
+if ($packages.Count -ne 1 -or $packages[0] -ne "ParakeetRuntime.Net.$Version.nupkg") {
+    throw "Expected only ParakeetRuntime.Net.$Version.nupkg in $output; found '$($packages -join "', '")'."
 }
 
 $unpacked = Join-Path ([IO.Path]::GetTempPath()) "parakeet-runtime-package-$([guid]::NewGuid().ToString('N'))"
 try {
     [IO.Compression.ZipFile]::ExtractToDirectory($packagePath, $unpacked)
-    $metadata = ([xml](Get-Content -LiteralPath (Join-Path $unpacked 'ParakeetRuntime.nuspec') -Raw)).package.metadata
-    if ($metadata.id -ne 'ParakeetRuntime' -or $metadata.version -ne $Version) {
-        throw "The package is '$($metadata.id)' $($metadata.version); expected ParakeetRuntime $Version."
+    $metadata = ([xml](Get-Content -LiteralPath (Join-Path $unpacked 'ParakeetRuntime.Net.nuspec') -Raw)).package.metadata
+    if ($metadata.id -ne 'ParakeetRuntime.Net' -or $metadata.version -ne $Version) {
+        throw "The package is '$($metadata.id)' $($metadata.version); expected ParakeetRuntime.Net $Version."
     }
-    $library = Join-Path $unpacked 'lib\net10.0\ParakeetRuntime.dll'
+    $library = Join-Path $unpacked 'lib\net10.0\ParakeetRuntime.Net.dll'
     foreach ($required in $library, (Join-Path $unpacked 'README.md'), (Join-Path $unpacked 'THIRD-PARTY-NOTICES.md')) {
         if (-not (Test-Path -LiteralPath $required)) { throw "The package has no $($required.Substring($unpacked.Length + 1))." }
     }
