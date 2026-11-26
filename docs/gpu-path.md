@@ -110,10 +110,13 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
   advances only after `Signal` succeeds, so a wait never targets a value that was never queued. If
   `SetEventOnCompletion` fails, `WaitFor` polls the fence every millisecond until it is reached or
   the device is removed.
-- The weight upload uses this to overlap: it fills one pair of 64 MB + 8 MB staging buffers from
+- The weight upload uses this to overlap: it fills one pair of 16 MB + 2 MB staging buffers from
   the model file while the GPU copies the other pair. A buffer pair is refilled only after the
   copy that read it has finished. The staging buffers are released only when the GPU is idle,
-  also on a failed load.
+  also on a failed load. The driver frees released upload buffers only at some later submit,
+  seconds after the load, so an app that loads and waits for speech holds them until then; the
+  pairs are small for that reason, and the largest tensor (the joint output, 5.2 MB) still fits.
+  The GPU copy is never what the load waits for, so smaller pairs don't make it slower.
 - D3D12 resource-state rules apply: a buffer a shader reads is in
   `NON_PIXEL_SHADER_RESOURCE`, a buffer it writes is in `UNORDERED_ACCESS`, and copies need
   `COPY_DEST` / `COPY_SOURCE`. A buffer written by one dispatch and read or written by the next,

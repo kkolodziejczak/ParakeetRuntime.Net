@@ -199,6 +199,11 @@ are removed. The result keeps the punctuation and capitals the model writes.
   time. The model also drops its own weight arrays when disposed: a caller that disposes in the
   continuation of an awaited transcription still holds the model on its stack (in the awaited call's
   state), and the collection would otherwise find the 780 MB of CPU weights still reachable.
+- `LoadAsync` also collects once at the end of the load. A GPU load leaves about 73 MB of float
+  tensors it read only to upload, and the GPU path allocates almost nothing afterwards, so no
+  collection would ever free them; there the live heap is nearly empty and a compacting collection
+  costs a few milliseconds. A CPU load gets the background collection instead, because compacting
+  would move 780 MB of weights.
 - After each transcription that ran on the CPU, the engine starts a background full garbage
   collection, which doesn't block the caller. The CPU path's buffers for one utterance are large
   objects, and the 860 MB of managed weights let the runtime put off a full collection for many

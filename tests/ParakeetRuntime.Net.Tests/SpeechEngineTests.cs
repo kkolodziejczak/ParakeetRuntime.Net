@@ -105,4 +105,14 @@ public sealed class SpeechEngineMemoryTests
         Assert.True(whileLoaded - GC.GetTotalMemory(forceFullCollection: true) > MoreThanHalfOfTheCpuWeights);
         GC.KeepAlive(model);
     }
+
+    [InstalledModelAndGpuFact]
+    public async Task A_gpu_load_leaves_no_managed_arrays_behind_for_an_app_that_waits_for_speech()
+    {
+        var beforeLoad = GC.GetTotalMemory(forceFullCollection: true);
+
+        using var engine = await SpeechEngine.LoadAsync(SpeechModel.Default());
+
+        Assert.True(GC.GetTotalMemory(forceFullCollection: false) - beforeLoad < 16L << 20);
+    }
 }

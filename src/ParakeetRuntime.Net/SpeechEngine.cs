@@ -31,7 +31,16 @@ public sealed class SpeechEngine : IDisposable
             throw new FileNotFoundException($"The speech model is not installed ({speechModel.Path}).", speechModel.Path);
         var chosen = options ?? new SpeechEngineOptions();
         var model = await Task.Run(() => new ParakeetModel(speechModel.Path, chosen.UseGpu, chosen.GpuNameContains), cancellationToken).ConfigureAwait(false);
+        ReturnTheLoadsTemporaryArrays(model);
         return new SpeechEngine(model);
+    }
+
+    private static void ReturnTheLoadsTemporaryArrays(IUtteranceRecognizer model)
+    {
+        if (model.IsUsingGpu)
+            ReturnTheModelsManagedMemoryNow();
+        else
+            FreeTheCpuPathsBuffersInTheBackground();
     }
 
     /// <summary>

@@ -322,8 +322,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             wdMega = gpu.CreateDefaultBuffer(totalD, allowUav: false);
             floatMega = gpu.CreateDefaultBuffer(totalF, allowUav: false);
 
-            const ulong stageQCap = 64UL * 1024 * 1024;
-            const ulong stageDCap = 8UL * 1024 * 1024;
+            const ulong stageQCap = 16UL * 1024 * 1024;
+            const ulong stageDCap = 2UL * 1024 * 1024;
             using var firstStageQ = gpu.CreateUploadBuffer(stageQCap);
             using var firstStageD = gpu.CreateUploadBuffer(stageDCap);
             using var secondStageQ = gpu.CreateUploadBuffer(stageQCap);
