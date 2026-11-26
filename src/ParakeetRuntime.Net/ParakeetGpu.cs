@@ -82,6 +82,9 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private GpuBuffer? bufFeats, bufSubA, bufSubB, bufFeatsUpload;
     private GpuBuffer? bufX, bufA, bufB, bufWide, bufEncProj;
     private GpuBuffer? decTokens, decTokensRb;
+    private const int MostFramesReadingTheCachedPositions = 251;
+    private GpuBuffer? projectedPositionsUpTo20s;
+    private ulong ProjectedPositionsBytesPerLayer => (ulong)(2 * MostFramesReadingTheCachedPositions - 1) * (ulong)d * 4;
 
     private readonly GpuBuffer[] decH, decC;
     private readonly GpuBuffer decPredProj, decLogits;
@@ -737,6 +740,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         uint scaleBits = BitConverter.SingleToUInt32Bits(1f / MathF.Sqrt(dk));
 
         RecordSubsampling(H0, W0, H1, W1, H2, W2, H3, W3, T, curWide, curX);
+        if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is null)
+            RecordProjectedPositionsUpTo20s();
 
         double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         int startLayer = 0;
@@ -745,7 +750,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         {
             gpu.ExecuteAndWait();
             gpu.BeginCommands();
-            RecordConformerLayer(layers[0], ref curX, ref curA, curB, curWide, T, P, peSliceByteOffset, scaleBits);
+            RecordConformerLayer(0, layers[0], ref curX, ref curA, curB, curWide, T, P, peSliceByteOffset, scaleBits);
             long layer0Start = System.Diagnostics.Stopwatch.GetTimestamp();
             gpu.ExecuteAndWait();
             double layer0Ms = (System.Diagnostics.Stopwatch.GetTimestamp() - layer0Start) * toMs;
@@ -760,7 +765,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         int layersInBatch = 0;
         for (int i = startLayer; i < layers.Length; i++)
         {
-            RecordConformerLayer(layers[i], ref curX, ref curA, curB, curWide, T, P, peSliceByteOffset, scaleBits);
+            RecordConformerLayer(i, layers[i], ref curX, ref curA, curB, curWide, T, P, peSliceByteOffset, scaleBits);
             layersInBatch++;
             if (layersPerSubmit < layers.Length && layersInBatch >= layersPerSubmit && i + 1 < layers.Length)
             {
@@ -892,7 +897,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private static double TrackSlowerAtOnceFasterGradually(double previous, double sample) =>
         Math.Max(previous * 0.7 + sample * 0.3, sample * 0.85);
 
-    private void RecordConformerLayer(LayerGpu l, ref GpuBuffer curX, ref GpuBuffer curA, GpuBuffer curB, GpuBuffer curWide, int T, int P, uint peSliceByteOffset, uint scaleBits)
+    private void RecordConformerLayer(int layerIndex, LayerGpu l, ref GpuBuffer curX, ref GpuBuffer curA, GpuBuffer curB, GpuBuffer curWide, int T, int P, uint peSliceByteOffset, uint scaleBits)
     {
         RecordLayerNorm(curX, curA, l.NFf1g, l.NFf1b, T);
         RecordQ8Gemm(curA, 0, curWide, T, l.Ff1a, GpuEpilogue.Silu);
@@ -900,8 +905,16 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         RecordLayerNorm(curX, curA, l.NAttg, l.NAttb, T);
         RecordQ8Gemm(curA, 0, curWide, T, l.Qkv, GpuEpilogue.Store);
-        RecordQ8GemmFromStatic(floatMega, peOffset, peSliceByteOffset, curB, P, l.Pos, GpuEpilogue.Store);
-        RecordAttention(curWide, curB, curA, l.U, l.V, T, scaleBits);
+        if (T <= MostFramesReadingTheCachedPositions)
+        {
+            ulong rowOfPositionTMinus1 = (ulong)(MostFramesReadingTheCachedPositions - T);
+            RecordAttention(curWide, projectedPositionsUpTo20s!, (ulong)layerIndex * ProjectedPositionsBytesPerLayer + rowOfPositionTMinus1 * (ulong)d * 4, curA, l.U, l.V, T, scaleBits);
+        }
+        else
+        {
+            RecordQ8GemmFromStatic(floatMega, peOffset, peSliceByteOffset, curB, P, l.Pos, GpuEpilogue.Store);
+            RecordAttention(curWide, curB, 0, curA, l.U, l.V, T, scaleBits);
+        }
         RecordQ8Gemm(curA, 0, curX, T, l.Outp, GpuEpilogue.AddResidual);
 
         RecordLayerNorm(curX, curA, l.NConvg, l.NConvb, T);
@@ -1176,7 +1189,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         DispatchQ8Gemm(staticInput, srvOffset, xByteOffset, output, M, w, epilogue);
     }
 
-    private void DispatchQ8Gemm(GpuBuffer input, ulong inputSrvOffset, uint xByteOffset, GpuBuffer output, int M, in GpuQ8Weight w, GpuEpilogue epilogue)
+    private void DispatchQ8Gemm(GpuBuffer input, ulong inputSrvOffset, uint xByteOffset, GpuBuffer output, int M, in GpuQ8Weight w, GpuEpilogue epilogue, ulong outputUavOffset = 0)
     {
         var tile = Q8GemmTile(M);
         var pipeline = psoQ8GemmSmall;
@@ -1191,7 +1204,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         gpu.SetSrv(1, wqMega, w.QByteOffset);
         gpu.SetSrv(2, wdMega, w.DByteOffset);
         gpu.SetSrv(3, floatMega, w.BiasByteOffset);
-        gpu.SetUav(0, output);
+        gpu.SetUav(0, output, outputUavOffset);
         Dispatch(gpu.CommandList, (uint)((w.Rows + tile - 1) / tile), (uint)((M + tile - 1) / tile), 1);
     }
 
@@ -1206,7 +1219,19 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         catch (Exception) { return 0; }
     }
 
-    private void RecordAttention(GpuBuffer qkv, GpuBuffer posP, GpuBuffer ctx, ulong uOff, ulong vOff, int T, uint scaleBits)
+    private void RecordProjectedPositionsUpTo20s()
+    {
+        int rows = 2 * MostFramesReadingTheCachedPositions - 1;
+        uint firstRowByteOffset = (uint)((long)((peRows + 1) / 2 - MostFramesReadingTheCachedPositions) * d * 4);
+        var table = gpu.CreateDefaultBuffer((ulong)layers.Length * ProjectedPositionsBytesPerLayer, allowUav: true);
+        gpu.Transition(table, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (int i = 0; i < layers.Length; i++)
+            DispatchQ8Gemm(floatMega, peOffset, firstRowByteOffset, table, rows, layers[i].Pos, GpuEpilogue.Store, (ulong)i * ProjectedPositionsBytesPerLayer);
+        gpu.Transition(table, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        projectedPositionsUpTo20s = table;
+    }
+
+    private void RecordAttention(GpuBuffer qkv, GpuBuffer posP, ulong posByteOffset, GpuBuffer ctx, ulong uOff, ulong vOff, int T, uint scaleBits)
     {
         gpu.Transition(qkv, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         gpu.Transition(posP, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1216,7 +1241,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         Span<uint> c = [(uint)T, (uint)d, (uint)dk, scaleBits];
         gpu.SetRootConstants(c);
         gpu.SetSrv(0, qkv);
-        gpu.SetSrv(1, posP);
+        gpu.SetSrv(1, posP, posByteOffset);
         gpu.SetSrv(2, floatMega, uOff);
         gpu.SetSrv(3, floatMega, vOff);
         gpu.SetUav(0, ctx);
@@ -1277,6 +1302,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         bufSubA?.Dispose(); bufSubB?.Dispose();
         bufX?.Dispose(); bufA?.Dispose(); bufB?.Dispose();
         bufWide?.Dispose(); bufEncProj?.Dispose();
+        projectedPositionsUpTo20s?.Dispose();
         floatMega.Dispose();
         wdMega.Dispose();
         wqMega.Dispose();

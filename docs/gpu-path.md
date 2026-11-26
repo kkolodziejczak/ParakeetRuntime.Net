@@ -97,6 +97,14 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
 - Activation scratch buffers (`bufX`, `bufA`, `bufB`, `bufWide`, the subsampling and Mel buffers,
   the token buffer) grow on demand to the largest audio, frame count and `T` seen so far, and are
   then reused.
+- The projected positions (`pe × linear_pos`, `2T − 1` rows per layer) depend only on the
+  position, never on the audio. The first utterance of 20 s or less (`T ≤ 251`) fills a table of
+  501 rows per layer for all 24 layers (47 MB), with the same Q8 GEMM writing at a per-layer offset;
+  every later utterance up to 20 s binds the rows it needs from the middle of that table (an SRV
+  byte offset) instead of 24 positional GEMMs per utterance. Each output row of the Q8 GEMM is the
+  same chain of multiply-adds whatever the row count, so a slice of the table has the bits a
+  per-utterance projection would have. Longer utterances still project per utterance. This is
+  8% of the encoder's GEMM work; on the laptop's MX450 transcription got about 6% faster.
 - The decoder state buffers are fixed in size and small. Each LSTM layer's hidden state `decH[i]`
   holds two slots (`LstmHiddenPingPongSlots`), so `LstmLayerCondMain` reads one slot and writes the
   other in the same dispatch.
