@@ -1030,3 +1030,41 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
   `wav16` ≤ 20 s and `long60` on the MX450 (150/150, 21/21), `pl_pl` `wav16` ≤ 20 s on the Intel UHD (150/150) and
   on the CPU (150/150). Those runs report a load of 0.58 s on the MX450, 0.46 s on the Intel UHD and 0.64 s on the CPU.
 - The full test suite runs in 23–27 s instead of 5 min 40 s, because the GPU tests no longer compile shaders.
+
+## 2026-11-26 · CPU memory between transcriptions: a background full collection after each one
+
+- **Machine:** as in the 2026-11-25 laptop matrix (Intel Core i7-11850H, NVIDIA GeForce MX450 2 GB, Intel UHD
+  Graphics, 32 GB RAM); PrivateType was running with its own engine during the runs
+- **Commit:** before is `48cd84a`; after is the commit that adds this record
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** FLEURS `en_us` dev `7271183655525300794.wav` (11.4 s)
+- **Command:** a console app loads one engine with `UseGpu: false` and calls `TranscribeWavAsync` 8 times, then
+  reads the process working set. "Before" calls nothing after a transcription; "background" and "blocking" call
+  `GC.Collect(2, Forced)` with `blocking: false` or `true` from the app, which is what the engine now does with
+  `blocking: false`. No affinity
+
+Back to back, 8 transcriptions each:
+
+| | Before | Background | Blocking |
+| --- | --- | --- | --- |
+| Working set after transcription 1 → 8 | 921 → 1,228 MB, still growing | 909 → 877 MB | 911 → 879 MB |
+| Full collections in the run | 0 | 8 | 8 |
+| Time the call takes | – | 0.2–0.5 ms (one 5.0 ms) | 3.4–7.9 ms |
+
+With 1 s between transcriptions, before and background alternating, 3 processes each, transcriptions 2–8:
+
+| | Before | Background |
+| --- | --- | --- |
+| Mean transcription time per process | 0.417, 0.598, 0.472 s | 0.447, 0.568, 0.535 s |
+| Working set after transcription 8 | 1,224–1,227 MB | 872–876 MB |
+
+- Each transcription allocates 51 MB, almost all of it the CPU path's large buffers. Without a collection the working
+  set grows by about 44 MB per transcription, and the 2.6 GB peak noted during the 2026-11-25 work was the same
+  growth over a longer run.
+- The transcription times differ less between builds than between processes of the same build, which the laptop's
+  clock changes dominate. Back to back, the background collection overlaps the next transcription; that case is not
+  what an app does and is not measured further.
+- With the change in the engine and nothing called by the app, the same 8 transcriptions end at 875 MB (peak 920 MB),
+  and 8 on the MX450 run no extra full collection (working set 246 MB).
+- A collection doesn't change any computed value, so transcripts were not compared; `--corpus` builds
+  `ParakeetModel` directly and never runs this code. The full test suite passes (261/261).

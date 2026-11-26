@@ -197,6 +197,11 @@ are removed. The result keeps the punctuation and capitals the model writes.
   collection. The CPU weights are managed arrays, and without that collection they would stay in
   the process until some later full collection, which an idle application may not run for a long
   time.
+- After each transcription that ran on the CPU, the engine starts a background full garbage
+  collection, which doesn't block the caller. The CPU path's buffers for one utterance are large
+  objects, and the 860 MB of managed weights let the runtime put off a full collection for many
+  utterances, so without it the working set grows by about the size of those buffers per utterance.
+  GPU transcriptions allocate almost nothing managed and skip it.
 
 ## Model install and verification
 

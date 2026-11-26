@@ -72,6 +72,8 @@ public sealed class SpeechEngine : IDisposable
             {
                 Backend = running.BackendName;
                 IsUsingGpu = running.IsUsingGpu;
+                if (!running.IsUsingGpu)
+                    FreeTheCpuPathsBuffersInTheBackground();
             }
         }
         finally
@@ -82,6 +84,9 @@ public sealed class SpeechEngine : IDisposable
 
     private static Task<string> RunToCompletionWhileHoldingTheLock(IUtteranceRecognizer model, float[] samples16KhzMono, CancellationToken stopBetweenPieces) =>
         Task.Run(() => QuietestPointCutter.TranscribeInPieces(samples16KhzMono, model.Transcribe, stopBetweenPieces));
+
+    private static void FreeTheCpuPathsBuffersInTheBackground() =>
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false);
 
     /// <summary>
     /// Transcribes a WAV file of up to 10 minutes. Its audio is converted to 16 kHz mono first, and is then
