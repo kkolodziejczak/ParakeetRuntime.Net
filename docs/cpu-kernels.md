@@ -30,6 +30,8 @@ still in a register.
 ### Packing
 
 `Pack` takes over the arrays of the `Q8Matrix` it is given; that matrix is not usable afterwards.
+Groups of 8 rows are packed in parallel, each into its own part of the output, moving the 4-byte
+runs as whole `int` words.
 
 - The AVX2 paths interleave 8 output rows, 4 bytes at a time. One 256-bit multiply-add then gives
   8 dot products of 4 values each, so a block of 32 needs 8 of them and one float scaling for 8

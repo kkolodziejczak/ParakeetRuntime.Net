@@ -2,10 +2,11 @@ This document describes what the decoder, encoder, subsampling and mel HLSL shad
 
 # GPU shaders
 
-The shaders live in `src/ParakeetRuntime.Net/Shaders/` as embedded resources. `D3D12Device` compiles
-each entry point at run time through the inbox `d3dcompiler_47.dll`, for shader model 5.1
-(`cs_5_1`) at optimization level 3. The host refers to entry points by their string names, so an
-entry point must never be renamed.
+The shaders live in `src/ParakeetRuntime.Net/Shaders/`. The build compiles each entry point through the
+inbox `d3dcompiler_47.dll`, for shader model 5.1 (`cs_5_1`) at optimization level 3, and embeds the
+bytecode (see [gpu-path.md](gpu-path.md#pipelines-and-compilation)). The host refers to entry points by
+their string names, so an entry point must never be renamed. An entry point is a function with a
+`[numthreads(...)]` attribute directly before `void <name>(`; the build finds them that way.
 
 ## Shared conventions
 

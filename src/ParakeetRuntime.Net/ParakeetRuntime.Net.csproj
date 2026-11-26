@@ -16,7 +16,42 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Shaders\*.hlsl" />
+    <ShaderSource Include="Shaders\*.hlsl" />
   </ItemGroup>
+
+  <!--
+    Every [numthreads] entry point is compiled to DXBC here, with the same compiler, target and flags as
+    D3D12Device.CompilePipeline, so loading the model only hands bytecode to the driver. FXC needs several
+    seconds of CPU per load otherwise. d3dcompiler_47.dll ships with Windows; elsewhere the build skips this
+    and the engine compiles at run time.
+  -->
+  <UsingTask TaskName="CompileComputeShaders" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Sources ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <OutputDirectory ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs" />
+    </Task>
+  </UsingTask>
+
+  <PropertyGroup>
+    <ShaderBytecodeDirectory>$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)shader-bytecode\</ShaderBytecodeDirectory>
+  </PropertyGroup>
+
+  <Target Name="CompileShadersToBytecode" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'"
+          Inputs="@(ShaderSource);$(MSBuildThisFileDirectory)..\..\build\CompileComputeShaders.cs" Outputs="$(ShaderBytecodeDirectory)compiled.stamp">
+    <RemoveDir Directories="$(ShaderBytecodeDirectory)" />
+    <CompileComputeShaders Sources="@(ShaderSource)" OutputDirectory="$(ShaderBytecodeDirectory)" />
+    <Touch Files="$(ShaderBytecodeDirectory)compiled.stamp" AlwaysCreate="true" />
+  </Target>
+
+  <Target Name="EmbedShaderBytecode" AfterTargets="CompileShadersToBytecode" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'">
+    <ItemGroup>
+      <ShaderBytecode Include="$(ShaderBytecodeDirectory)*.dxbc" />
+      <EmbeddedResource Include="@(ShaderBytecode)" LogicalName="Shaders/%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="TestableIO.System.IO.Abstractions.Wrappers" Version="23.0.1" />

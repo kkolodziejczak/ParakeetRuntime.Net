@@ -263,9 +263,9 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                 Require(g.Q8Shape(p + "self_attn.linear_pos.weight") == (d, d), $"Invalid {p}linear_pos shape.");
             }
 
-            largeGemm = Task.Run(() => gpu.CompileEmbeddedPipeline("Q8Gemm.hlsl", "Q8GemmMain"));
+            largeGemm = Task.Run(() => gpu.EmbeddedPipeline("Q8Gemm.hlsl", "Q8GemmMain"));
             compiling = Task.Run(() => Parallel.For(0, shaderSpecs.Length, idx =>
-                compiledPsos[idx] = gpu.CompileEmbeddedPipeline(shaderSpecs[idx].File, shaderSpecs[idx].Entry)));
+                compiledPsos[idx] = gpu.EmbeddedPipeline(shaderSpecs[idx].File, shaderSpecs[idx].Entry)));
 
             (int Rows, int K)[] perLayerQ8 =
             [
@@ -320,9 +320,17 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
             const ulong stageQCap = 64UL * 1024 * 1024;
             const ulong stageDCap = 8UL * 1024 * 1024;
-            using var stageQ = gpu.CreateUploadBuffer(stageQCap);
-            using var stageD = gpu.CreateUploadBuffer(stageDCap);
+            using var firstStageQ = gpu.CreateUploadBuffer(stageQCap);
+            using var firstStageD = gpu.CreateUploadBuffer(stageDCap);
+            using var secondStageQ = gpu.CreateUploadBuffer(stageQCap);
+            using var secondStageD = gpu.CreateUploadBuffer(stageDCap);
             using var stageF = gpu.CreateUploadBuffer(totalF);
+            using var stagingIsReleasedOnlyWhenTheGpuIsIdle = new WaitsForTheGpuOnDispose(gpu);
+            var stageQ = firstStageQ;
+            var stageD = firstStageD;
+            var otherStageQ = secondStageQ;
+            var otherStageD = secondStageD;
+            ulong otherStageFreeAt = 0;
 
             ulong qCursor = 0, dCursor = 0, fCursor = 256;
             ulong batchQStart = 0, batchQUsed = 0;
@@ -330,6 +338,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
             var pStageQ = (byte*)stageQ.Map();
             var pStageD = (byte*)stageD.Map();
+            var pOtherStageQ = (byte*)otherStageQ.Map();
+            var pOtherStageD = (byte*)otherStageD.Map();
             var pStageF = (byte*)stageF.Map();
             new Span<byte>(pStageF, 256).Clear();
 
@@ -337,8 +347,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             {
                 if (batchQUsed == 0 && batchDUsed == 0)
                     return;
-                stageQ.Unmap();
-                stageD.Unmap();
                 gpu.BeginCommands();
                 gpu.Transition(wqMega, D3D12_RESOURCE_STATE_COPY_DEST);
                 gpu.Transition(wdMega, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -346,9 +354,13 @@ internal sealed unsafe class ParakeetGpu : IDisposable
                     CopyBufferRegion(gpu.CommandList, wqMega.Resource, batchQStart, stageQ.Resource, 0, batchQUsed);
                 if (batchDUsed > 0)
                     CopyBufferRegion(gpu.CommandList, wdMega.Resource, batchDStart, stageD.Resource, 0, batchDUsed);
-                gpu.ExecuteAndWait();
-                pStageQ = (byte*)stageQ.Map();
-                pStageD = (byte*)stageD.Map();
+                var thisStageFreeAt = gpu.Submit();
+                gpu.WaitFor(otherStageFreeAt);
+                (stageQ, otherStageQ) = (otherStageQ, stageQ);
+                (stageD, otherStageD) = (otherStageD, stageD);
+                var filledQ = pStageQ; pStageQ = pOtherStageQ; pOtherStageQ = filledQ;
+                var filledD = pStageD; pStageD = pOtherStageD; pOtherStageD = filledD;
+                otherStageFreeAt = thisStageFreeAt;
                 batchQStart = qCursor;
                 batchDStart = dCursor;
                 batchQUsed = 0;
@@ -515,8 +527,6 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             }
 
             FlushQ8Batch();
-            stageQ.Unmap();
-            stageD.Unmap();
             stageF.Unmap();
 
             gpu.BeginCommands();
@@ -550,6 +560,11 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             gpu.Dispose();
             return null;
         }
+    }
+
+    private sealed class WaitsForTheGpuOnDispose(D3D12Device gpu) : IDisposable
+    {
+        public void Dispose() => gpu.WaitUntilIdle();
     }
 
     private static void WaitUntilNoCompileCanStoreAPipeline(Task? compiling)

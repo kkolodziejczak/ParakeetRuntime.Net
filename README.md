@@ -107,7 +107,7 @@ string spoken = await engine.TranscribeAsync(samples);
   | --- | --- | --- | --- |
   | Seconds of work per minute of audio | 3.4–3.6 s | 1.4 s | 5.9 s |
   | Words wrong (word error rate) | 6.0–6.7% | 6.0–6.6% | 6.0–6.6% |
-  | Loading the model | 1.5–2.7 s | 3.7–8.8 s, both GPUs together | |
+  | Loading the model (2026-11-26) | 0.6–1.4 s | 0.4–0.6 s | 0.4–0.5 s |
 
   On a desktop (Intel Core Ultra 7 270K Plus, NVIDIA GeForce RTX 5070 Ti), measured 2026-11-23 on the same
   model and FLEURS Polish and English clips of 20 s to 2 minutes, the RTX took under 0.2 s and the processor

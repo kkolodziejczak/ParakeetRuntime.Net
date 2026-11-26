@@ -2,6 +2,7 @@
 using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 
@@ -159,25 +160,35 @@ internal static unsafe class Kernels
         int groups = (takenOver.Rows + 7) / 8, blocks = takenOver.K / 32;
         var q = takenOver.Rows % 8 == 0 ? takenOver.Q : new sbyte[checked(groups * 8 * takenOver.K)];
         var d = takenOver.Rows % 8 == 0 ? takenOver.D : new float[groups * 8 * blocks];
-        var rows = new sbyte[8 * takenOver.K]; var scales = new float[8 * blocks];
-        for (int g = 0; g < groups; g++)
-        {
-            int count = Math.Min(8, takenOver.Rows - g * 8);
-            Array.Clear(rows); Array.Clear(scales);
-            Array.Copy(takenOver.Q, (long)g * 8 * takenOver.K, rows, 0, count * takenOver.K);
-            Array.Copy(takenOver.D, g * 8 * blocks, scales, 0, count * blocks);
-            for (int j = 0; j < 8; j++)
-                for (int b = 0; b < blocks; b++)
-                {
-                    d[(g * blocks + b) * 8 + j] = scales[j * blocks + b];
-                    for (int c = 0; c < 8; c++)
-                        for (int e = 0; e < 4; e++)
-                            q[(long)g * 8 * takenOver.K + b * 256 + c * 32 + j * 4 + e] = rows[j * takenOver.K + b * 32 + c * 4 + e];
-                }
-        }
+        Parallel.For(0, groups,
+            () => (Rows: new sbyte[8 * takenOver.K], Scales: new float[8 * blocks]),
+            (g, _, scratch) =>
+            {
+                PackGroupInterleavingRowsByFourBytes(takenOver, g, scratch.Rows, scratch.Scales, q, d);
+                return scratch;
+            },
+            _ => { });
         float[]? padded = null;
         if (bias is not null) { padded = new float[groups * 8]; bias.CopyTo(padded, 0); }
         return new Q8Weights(path, takenOver.Rows, takenOver.K, q, d, padded);
+    }
+
+    static void PackGroupInterleavingRowsByFourBytes(Q8Matrix source, int g, sbyte[] rows, float[] scales, sbyte[] q, float[] d)
+    {
+        int k = source.K, blocks = k / 32, count = Math.Min(8, source.Rows - g * 8);
+        Array.Clear(rows); Array.Clear(scales);
+        Array.Copy(source.Q, (long)g * 8 * k, rows, 0, count * k);
+        Array.Copy(source.D, g * 8 * blocks, scales, 0, count * blocks);
+        var rowWords = MemoryMarshal.Cast<sbyte, int>(rows.AsSpan());
+        var groupWords = MemoryMarshal.Cast<sbyte, int>(q.AsSpan(g * 8 * k, 8 * k));
+        int wordsPerRow = k / 4;
+        for (int j = 0; j < 8; j++)
+            for (int b = 0; b < blocks; b++)
+            {
+                d[(g * blocks + b) * 8 + j] = scales[j * blocks + b];
+                for (int c = 0; c < 8; c++)
+                    groupWords[b * 64 + c * 8 + j] = rowWords[j * wordsPerRow + b * 8 + c];
+            }
     }
 
     public static float[] Linear(float[] x, int m, Q8Weights w, Activation activation = Activation.None)

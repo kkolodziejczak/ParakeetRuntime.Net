@@ -639,7 +639,7 @@ public sealed unsafe class D3D12KernelsTests
             this.weight = weight;
             this.bias = bias;
             this.tile = tile;
-            pso = gpu.CompileEmbeddedPipeline("Q8Gemm.hlsl", entry);
+            pso = gpu.EmbeddedPipeline("Q8Gemm.hlsl", entry);
 
             ulong qBytes = (ulong)weight.Q.Length;
             ulong dBytes = (ulong)((weight.D.Length + 1) / 2 * 4);
@@ -733,10 +733,10 @@ public sealed unsafe class D3D12KernelsTests
         public EncoderOpsGpuProbe(D3D12Device gpu)
         {
             this.gpu = gpu;
-            psoLn = gpu.CompileEmbeddedPipeline("EncoderOps.hlsl", "LayerNormMain");
-            psoAtt = gpu.CompileEmbeddedPipeline("EncoderOps.hlsl", "RelPosAttentionMain");
-            psoGlu = gpu.CompileEmbeddedPipeline("EncoderOps.hlsl", "GluMain");
-            psoDw = gpu.CompileEmbeddedPipeline("EncoderOps.hlsl", "DepthwiseConvBnSiluMain");
+            psoLn = gpu.EmbeddedPipeline("EncoderOps.hlsl", "LayerNormMain");
+            psoAtt = gpu.EmbeddedPipeline("EncoderOps.hlsl", "RelPosAttentionMain");
+            psoGlu = gpu.EmbeddedPipeline("EncoderOps.hlsl", "GluMain");
+            psoDw = gpu.EmbeddedPipeline("EncoderOps.hlsl", "DepthwiseConvBnSiluMain");
         }
 
         public float[] LayerNorm(float[] x, int rows, int d, float[] g, float[] b) => Run(psoLn, [(uint)d], (uint)rows, 1, rows * d, x, g, b);
@@ -809,9 +809,9 @@ public sealed unsafe class D3D12KernelsTests
         public DecoderOpsGpuProbe(D3D12Device gpu)
         {
             this.gpu = gpu;
-            psoLstm = gpu.CompileEmbeddedPipeline("DecoderOps.hlsl", "LstmLayerCondMain");
-            psoGemv = gpu.CompileEmbeddedPipeline("DecoderOps.hlsl", "Q8GemvCondMain");
-            psoArgMax = gpu.CompileEmbeddedPipeline("DecoderOps.hlsl", "ArgMaxAndStepMain");
+            psoLstm = gpu.EmbeddedPipeline("DecoderOps.hlsl", "LstmLayerCondMain");
+            psoGemv = gpu.EmbeddedPipeline("DecoderOps.hlsl", "Q8GemvCondMain");
+            psoArgMax = gpu.EmbeddedPipeline("DecoderOps.hlsl", "ArgMaxAndStepMain");
         }
 
         public float[] Q8Gemv(float[] x, Q8Matrix w, float[]? bias = null)
@@ -1081,8 +1081,8 @@ public sealed unsafe class D3D12KernelsTests
         public MelOpsGpuProbe(D3D12Device gpu)
         {
             this.gpu = gpu;
-            psoFftLog = gpu.CompileEmbeddedPipeline("MelOps.hlsl", "MelFftLogMain");
-            psoNorm = gpu.CompileEmbeddedPipeline("MelOps.hlsl", "MelNormalizeMain");
+            psoFftLog = gpu.EmbeddedPipeline("MelOps.hlsl", "MelFftLogMain");
+            psoNorm = gpu.EmbeddedPipeline("MelOps.hlsl", "MelNormalizeMain");
         }
 
         public float[] Compute(float[] audio, Mel mel, out int frames)
@@ -1160,7 +1160,7 @@ public sealed unsafe class D3D12KernelsTests
         public SubsampleOpsGpuProbe(D3D12Device gpu)
         {
             this.gpu = gpu;
-            psoF32GemmRelu = gpu.CompileEmbeddedPipeline("SubsampleOps.hlsl", "F32GemmReluMain");
+            psoF32GemmRelu = gpu.EmbeddedPipeline("SubsampleOps.hlsl", "F32GemmReluMain");
         }
 
         public float[] F32GemmRelu(float[] x, float[] w, float[] bias, int m, int n, int k)

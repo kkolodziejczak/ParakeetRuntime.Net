@@ -995,3 +995,38 @@ Word error rate, ParakeetRuntime / NeMo-Speech.cpp on the same device:
 - Compression is passed on the release publish command (`Build-Release.ps1`), not set in the project, because
   a framework-dependent single-file publish fails with it (NETSDK1176).
 - Signing a compressed exe is not checked here; the first signed release run checks it.
+
+## 2026-11-26 · Model load: shader bytecode at build time, faster CPU packing, overlapped upload
+
+- **Machine:** as in the 2026-11-25 laptop matrix (Intel Core i7-11850H, NVIDIA GeForce MX450 2 GB, Intel UHD
+  Graphics, 32 GB RAM); PrivateType was running with its own engine during the runs; model file in the OS cache
+- **Commit:** before is `4b7175d` (the `0.1.0-spike.1` package); after is the commit that adds this record, measured
+  one change at a time as local packages
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** FLEURS `en_us` dev `608005572552850776.wav` (14.9 s)
+- **Command:** a console app on the package calls `SpeechEngine.LoadAsync`, `TranscribeWavAsync` and `Dispose` three
+  times in one process, 2 s apart; 3 or 4 processes per build, builds alternating; no affinity. "First" is the first
+  load in a process, "reload" the second and third
+
+| Device | Build | Load, first | Load, reload | First transcription | Dispose |
+| --- | --- | --- | --- | --- | --- |
+| MX450 | before | 4.91–7.70 s | 4.16–5.68 s | 0.45–0.90 s | 0.75–1.81 s |
+| MX450 | bytecode | 0.65–0.87 s | 0.52–0.69 s | 0.31–0.94 s | 0.04–0.09 s |
+| MX450 | + overlapped upload | 0.54–0.62 s | 0.42–0.48 s | 0.28–0.67 s | 0.04–0.11 s |
+| Intel UHD | before | 3.74–7.01 s | 4.54–6.09 s | 1.42–1.87 s | 0.18–1.71 s |
+| Intel UHD | bytecode | 0.50–0.82 s | 0.40–0.51 s | 1.22–2.12 s | 0.09–0.15 s |
+| Intel UHD | + overlapped upload | 0.43–0.47 s | 0.36–0.39 s | 1.24–1.34 s | 0.10–0.12 s |
+| CPU | before (bytecode build) | 1.48–2.35 s | 1.14–2.44 s | 0.74–2.29 s | 0.08–0.47 s |
+| CPU | + parallel 4-byte packing | 0.85–1.44 s | 0.60–1.02 s | 0.92–2.02 s | 0.08–0.26 s |
+
+- **Bytecode:** the build compiles the 17 entry points (191 KB of DXBC) and embeds them; a load used to run FXC,
+  about 13 s of CPU over all threads. The bytecode is byte-identical to the run-time compile
+  (`ShaderBytecodeTests`). Dispose no longer waits for the 64 x 64 GEMM compile.
+- **Packing:** groups of 8 rows in parallel, 4-byte runs moved as `int`. The CPU's first transcription varies
+  with the machine's other load and is not attributed to the change.
+- **Upload:** two staging pairs (+72 MiB during the load) let the CPU read the next batch from the model file while
+  the GPU copies the last.
+- Transcripts identical to the 2026-11-25 matrix in 471/471 files (`--compare`, `--affinity 5500`, 1 pass): `en_us`
+  `wav16` ≤ 20 s and `long60` on the MX450 (150/150, 21/21), `pl_pl` `wav16` ≤ 20 s on the Intel UHD (150/150) and
+  on the CPU (150/150). Those runs report a load of 0.58 s on the MX450, 0.46 s on the Intel UHD and 0.64 s on the CPU.
+- The full test suite runs in 23–27 s instead of 5 min 40 s, because the GPU tests no longer compile shaders.

@@ -66,7 +66,7 @@ internal static unsafe class GemmBench
                 foreach (var v in variants)
                 {
                     var compile = Stopwatch.StartNew();
-                    pipelines.Add(v.File is null ? gpu.CompileEmbeddedPipeline("Q8Gemm.hlsl", v.Entry) : gpu.CompilePipeline(File.ReadAllText(v.File), v.File, v.Entry));
+                    pipelines.Add(v.File is null ? gpu.EmbeddedPipeline("Q8Gemm.hlsl", v.Entry) : gpu.CompilePipeline(File.ReadAllText(v.File), v.File, v.Entry));
                     Console.WriteLine($"  {v.Entry} from {Path.GetFileName(v.File ?? "shipped")} compiled in {compile.Elapsed.TotalMilliseconds:0} ms");
                 }
                 foreach (var frames in frameCounts)

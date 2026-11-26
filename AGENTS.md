@@ -58,7 +58,6 @@ there, because they use the app's audio capture.
 - Tiered JIT: with default tiering, `Kernels.Quantize`'s AVX2 passes stay at instrumented Tier0 for
   a whole `--cpu-bench` run, which skews kernel A/B tests. A/B kernels with
   `DOTNET_TieredCompilation=0`. Whether an app's first utterances run Tier0 code is not measured.
-- Intel iGPU load takes 2.3 s instead of 2.0 s since the 64x64 GEMM tile. The cause isn't traced.
 - Next CPU step, which needs the owner's OK: the positions-table walk in the attention scores.
 - Other platforms (decided 2026-11-24: v1 stays Windows-only): the cheap first step is CPU
   transcription and WAV on Linux x64. `ThreadBudget` calls `GetSystemCpuSetInformation` without an

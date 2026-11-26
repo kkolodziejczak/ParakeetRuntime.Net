@@ -63,23 +63,27 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
 
 ## Pipelines and compilation
 
-- Shaders are HLSL Shader Model 5.1 (`cs_5_1`), compiled at runtime by FXC in the inbox
-  `d3dcompiler_47.dll` with `D3DCOMPILE_OPTIMIZATION_LEVEL3`. The `.hlsl` files are embedded
-  resources.
-- `D3DCompile` is thread-safe, so the pipelines compile in parallel (`Parallel.For`) while the
-  weights upload.
-- The compile starts only after every tensor shape in the model has been checked against the
-  model metadata and the shader limits. A bad model fails at once, without waiting for FXC.
-- The 64 x 64 Q8 GEMM (`Q8GemmMain`) is far slower to compile than every other shader, because
-  its k loop is fully unrolled. It compiles in the background and may finish after the model has
-  loaded. Its `Task<nint>` (`largeGemmCompile`) is the only owner of that pipeline. Until the task
+- Shaders are HLSL Shader Model 5.1 (`cs_5_1`), compiled by FXC in the inbox `d3dcompiler_47.dll`
+  with `D3DCOMPILE_OPTIMIZATION_LEVEL3`.
+- The build compiles every `[numthreads]` entry point (`build/CompileComputeShaders.cs`, run by
+  `ParakeetRuntime.Net.csproj` on Windows) and embeds the DXBC as `Shaders/<file>.<entry>.dxbc`.
+  `EmbeddedPipeline` hands that bytecode to `CreateComputePipelineState`, so a load runs no HLSL
+  compiler. FXC took several seconds of CPU per load before. The `.hlsl` sources stay embedded:
+  without bytecode (a build on another OS) the entry point compiles at run time, and `--gemm-bench`
+  compiles shader files given to it. `ShaderBytecodeTests` checks that every embedded bytecode is
+  what the current source compiles to.
+- The pipelines are created in parallel (`Parallel.For`) while the weights upload, only after every
+  tensor shape in the model has been checked against the model metadata and the shader limits. A
+  bad model fails at once.
+- The 64 x 64 Q8 GEMM (`Q8GemmMain`) pipeline is created in the background and may be ready after
+  the model has loaded. Its `Task<nint>` (`largeGemmCompile`) is the only owner of that pipeline. Until the task
   has completed, `DispatchQ8Gemm` uses the 32 x 32 kernel, which gives the same bits (see below).
-  If the compile fails, the 32 x 32 kernel serves throughout.
-- On a failed load, the code waits for every compile still running before it releases the
-  pipelines (`WaitUntilNoCompileCanStoreAPipeline`), so that no compile can store a pipeline into
-  an array that has already been released.
-- `Dispose` waits for a large-GEMM compile still running (`WaitForLargeGemmPipelineOrZero`),
-  because the device must outlive the compile that uses it.
+  If creating it fails, the 32 x 32 kernel serves throughout.
+- On a failed load, the code waits for every pipeline still being created before it releases the
+  pipelines (`WaitUntilNoCompileCanStoreAPipeline`), so that none can be stored into an array that
+  has already been released.
+- `Dispose` waits for a large-GEMM pipeline still being created (`WaitForLargeGemmPipelineOrZero`),
+  because the device must outlive the call that uses it.
 
 ## Buffers
 
@@ -97,8 +101,14 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
 
 ## Command lists and resource states
 
-- `BeginCommands` resets the allocator and the list and sets the root signature.
-  `ExecuteAndWait` closes the list, submits it, signals the fence and waits for it.
+- The device has two command allocators and takes them in turn. `BeginCommands` waits until the
+  next allocator's last submission has finished, resets it and the list, and sets the root
+  signature. `Submit` closes the list, submits it and signals the fence, and returns the fence
+  value to wait for; `WaitFor` waits for it, and `ExecuteAndWait` does both.
+- The weight upload uses this to overlap: it fills one pair of 64 MB + 8 MB staging buffers from
+  the model file while the GPU copies the other pair. A buffer pair is refilled only after the
+  copy that read it has finished. The staging buffers are released only when the GPU is idle,
+  also on a failed load.
 - D3D12 resource-state rules apply: a buffer a shader reads is in
   `NON_PIXEL_SHADER_RESOURCE`, a buffer it writes is in `UNORDERED_ACCESS`, and copies need
   `COPY_DEST` / `COPY_SOURCE`. A buffer written by one dispatch and read or written by the next,

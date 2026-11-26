@@ -79,7 +79,9 @@ internal sealed unsafe class D3D12Device : IDisposable
     private nint adapter3;
     private nint device;
     private nint queue;
-    private nint allocator;
+    private readonly nint[] allocators;
+    private readonly ulong[] fenceValueWhenAllocatorIsFree;
+    private int currentAllocator;
     private nint commandList;
     private nint fence;
     private nint fenceEvent;
@@ -100,7 +102,7 @@ internal sealed unsafe class D3D12Device : IDisposable
     private D3D12Device(
         string adapterName, long dedicatedVram, long sharedMem,
         nint adapter, nint adapter3, nint device, nint queue,
-        nint allocator, nint commandList, nint fence, nint fenceEvent, nint rootSignature,
+        nint[] allocators, nint commandList, nint fence, nint fenceEvent, nint rootSignature,
         nint timestampHeap, ulong timestampFrequency)
     {
         AdapterName = adapterName;
@@ -111,7 +113,8 @@ internal sealed unsafe class D3D12Device : IDisposable
         this.adapter3 = adapter3;
         this.device = device;
         this.queue = queue;
-        this.allocator = allocator;
+        this.allocators = allocators;
+        fenceValueWhenAllocatorIsFree = new ulong[allocators.Length];
         this.commandList = commandList;
         this.fence = fence;
         this.fenceEvent = fenceEvent;
@@ -278,7 +281,7 @@ internal sealed unsafe class D3D12Device : IDisposable
             return null;
         }
 
-        nint dev = 0, q = 0, alloc = 0, list = 0, f = 0, rs = 0, tsHeap = 0;
+        nint dev = 0, q = 0, alloc = 0, secondAlloc = 0, list = 0, f = 0, rs = 0, tsHeap = 0;
         nint ev = 0;
         try
         {
@@ -295,6 +298,7 @@ internal sealed unsafe class D3D12Device : IDisposable
 
             var allocIid = IID_ID3D12CommandAllocator;
             CheckHr(CreateCommandAllocator(dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocIid, &alloc));
+            CheckHr(CreateCommandAllocator(dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocIid, &secondAlloc));
 
             var listIid = IID_ID3D12GraphicsCommandList;
             CheckHr(CreateCommandList(dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc, 0, &listIid, &list));
@@ -323,8 +327,8 @@ internal sealed unsafe class D3D12Device : IDisposable
 
             var result = new D3D12Device(
                 adapterName, dedicated, shared,
-                candidate, adapter3, dev, q, alloc, list, f, ev, rs, tsHeap, tsFreq);
-            adapter3 = dev = q = alloc = list = f = rs = tsHeap = ev = 0;
+                candidate, adapter3, dev, q, [alloc, secondAlloc], list, f, ev, rs, tsHeap, tsFreq);
+            adapter3 = dev = q = alloc = secondAlloc = list = f = rs = tsHeap = ev = 0;
             return result;
         }
         catch
@@ -334,6 +338,7 @@ internal sealed unsafe class D3D12Device : IDisposable
             SafeRelease(ref rs);
             SafeRelease(ref f);
             SafeRelease(ref list);
+            SafeRelease(ref secondAlloc);
             SafeRelease(ref alloc);
             SafeRelease(ref q);
             SafeRelease(ref dev);
@@ -432,17 +437,32 @@ internal sealed unsafe class D3D12Device : IDisposable
     public GpuBuffer CreateReadbackBuffer(ulong sizeBytes) =>
         CreateBuffer(sizeBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
 
-    public nint CompileEmbeddedPipeline(string resourceSuffix, string entryPoint)
+    public nint EmbeddedPipeline(string shaderFile, string entryPoint)
     {
-        var asm = Assembly.GetExecutingAssembly();
-        var name = asm.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith(resourceSuffix, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException($"Embedded HLSL shader resource ending with '{resourceSuffix}' was not found.");
-        using var stream = asm.GetManifestResourceStream(name)!;
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        return CompilePipeline(reader.ReadToEnd(), resourceSuffix, entryPoint);
+        using var bytecode = Assembly.GetExecutingAssembly().GetManifestResourceStream(EmbeddedBytecodeName(shaderFile, entryPoint));
+        if (bytecode is null)
+            return CompilePipeline(EmbeddedSource(shaderFile), shaderFile, entryPoint);
+        var bytes = new byte[bytecode.Length];
+        bytecode.ReadExactly(bytes);
+        return CreatePipeline(bytes);
     }
 
-    public nint CompilePipeline(string hlslSource, string sourceName, string entryPoint)
+    internal static string EmbeddedBytecodeName(string shaderFile, string entryPoint) => $"Shaders/{shaderFile}.{entryPoint}.dxbc";
+
+    internal static string EmbeddedSource(string shaderFile)
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        var name = asm.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("." + shaderFile, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Embedded HLSL shader resource ending with '{shaderFile}' was not found.");
+        using var stream = asm.GetManifestResourceStream(name)!;
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    public nint CompilePipeline(string hlslSource, string sourceName, string entryPoint) =>
+        CreatePipeline(CompileToBytecode(hlslSource, sourceName, entryPoint));
+
+    internal static byte[] CompileToBytecode(string hlslSource, string sourceName, string entryPoint)
     {
         var srcBytes = Encoding.UTF8.GetBytes(hlslSource);
         var nameBytes = Encoding.ASCII.GetBytes(sourceName + '\0');
@@ -465,20 +485,7 @@ internal sealed unsafe class D3D12Device : IDisposable
                     throw new InvalidOperationException($"HLSL compile failed for {sourceName}:{entryPoint}: {msg}");
                 }
             }
-
-            var psoDesc = new D3D12_COMPUTE_PIPELINE_STATE_DESC
-            {
-                pRootSignature = rootSignature,
-                CS = new D3D12_SHADER_BYTECODE
-                {
-                    pShaderBytecode = GetBufferPointer(codeBlob),
-                    BytecodeLength = GetBufferSize(codeBlob),
-                },
-            };
-            var psoIid = IID_ID3D12PipelineState;
-            nint pso = 0;
-            CheckHr(CreateComputePipelineState(device, &psoDesc, &psoIid, &pso));
-            return pso;
+            return new ReadOnlySpan<byte>((void*)GetBufferPointer(codeBlob), checked((int)GetBufferSize(codeBlob))).ToArray();
         }
         finally
         {
@@ -487,12 +494,35 @@ internal sealed unsafe class D3D12Device : IDisposable
         }
     }
 
+    private nint CreatePipeline(byte[] bytecode)
+    {
+        fixed (byte* pCode = bytecode)
+        {
+            var psoDesc = new D3D12_COMPUTE_PIPELINE_STATE_DESC
+            {
+                pRootSignature = rootSignature,
+                CS = new D3D12_SHADER_BYTECODE
+                {
+                    pShaderBytecode = (nint)pCode,
+                    BytecodeLength = (nuint)bytecode.Length,
+                },
+            };
+            var psoIid = IID_ID3D12PipelineState;
+            nint pso = 0;
+            CheckHr(CreateComputePipelineState(device, &psoDesc, &psoIid, &pso));
+            return pso;
+        }
+    }
+
     public void BeginCommands()
     {
         if (listOpen)
             throw new InvalidOperationException("Command list is already open.");
-        CheckHr(AllocatorReset(allocator));
-        CheckHr(ListReset(commandList, allocator, 0));
+        int next = (currentAllocator + 1) % allocators.Length;
+        WaitFor(fenceValueWhenAllocatorIsFree[next]);
+        CheckHr(AllocatorReset(allocators[next]));
+        CheckHr(ListReset(commandList, allocators[next], 0));
+        currentAllocator = next;
         SetComputeRootSignature(commandList, rootSignature);
         listOpen = true;
     }
@@ -567,14 +597,28 @@ internal sealed unsafe class D3D12Device : IDisposable
 
     public void ExecuteAndWait()
     {
+        if (listOpen)
+            WaitFor(Submit());
+    }
+
+    public ulong Submit()
+    {
         if (!listOpen)
-            return;
+            throw new InvalidOperationException("No command list is open.");
         listOpen = false;
         CheckHr(ListClose(commandList));
         nint list = commandList;
         ExecuteCommandLists(queue, 1, &list);
         ulong target = ++fenceValue;
         CheckHr(Signal(queue, fence, target));
+        fenceValueWhenAllocatorIsFree[currentAllocator] = target;
+        return target;
+    }
+
+    public void WaitUntilIdle() => WaitFor(fenceValue);
+
+    public void WaitFor(ulong target)
+    {
         ulong completed = GetCompletedValue(fence);
         if (completed < target)
         {
@@ -636,7 +680,8 @@ internal sealed unsafe class D3D12Device : IDisposable
         SafeRelease(ref rootSignature);
         SafeRelease(ref fence);
         SafeRelease(ref commandList);
-        SafeRelease(ref allocator);
+        for (int i = 0; i < allocators.Length; i++)
+            SafeRelease(ref allocators[i]);
         SafeRelease(ref queue);
         SafeRelease(ref device);
         SafeRelease(ref adapter3);
