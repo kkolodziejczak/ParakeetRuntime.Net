@@ -13,6 +13,7 @@ Repository-specific guidance. Inspect the current code and scripts before acting
 | `scripts/Run-Matrix.ps1` | The full speed matrix against NeMo-Speech.cpp, one run at a time, through `parakeet-runtime.exe --corpus`. |
 | `scripts/Build-Release.ps1` | Builds the unsigned release files into `artifacts\release\<version>`. |
 | `scripts/Test-ReleaseArtifacts.ps1` | Checks those files, and their signatures when given a thumbprint. |
+| `scripts/acceptance/` | The owner's manual acceptance wizard for a release build, with eight FLEURS clips (the only audio in the repository). |
 | `Directory.Build.props` | Shared settings: target framework, version, embedded PDBs, package metadata. |
 
 The library has no Windows SDK projection: the engine reaches Windows only through P/Invoke into
@@ -105,14 +106,17 @@ dotnet test ParakeetRuntime.Net.slnx --configuration Release
 
 ## Releasing (maintainer only)
 
-1. Add `.github/release-notes/vX.Y.Z.md` (see the [README there](.github/release-notes/README.md))
+1. The owner runs `.\scripts\acceptance\Start-Acceptance.ps1 -Version X.Y.Z` (see its
+   [README](scripts/acceptance/README.md)) in their own terminal; every step must pass. Start it for them
+   in its own window like the approval script below, then read `artifacts\acceptance\X.Y.Z\results-*.md`.
+2. Add `.github/release-notes/vX.Y.Z.md` (see the [README there](.github/release-notes/README.md))
    on `master`.
-2. Push the tag `vX.Y.Z`. `release.yml` tests and builds, then waits for signing.
-3. Run `gh release-signing approve -Tag vX.Y.Z` and type the SimplySign phone code. The signing
+3. Push the tag `vX.Y.Z`. `release.yml` tests and builds, then waits for signing.
+4. Run `gh release-signing approve -Tag vX.Y.Z` and type the SimplySign phone code. The signing
    job (in [gh-release-signing](https://github.com/kkolodziejczak/gh-release-signing)) signs
    `parakeet-runtime.exe`, `ParakeetRuntime.Net.dll` inside the package, and the package, all in one
    approval.
-4. Review the draft release, then publish it. `publish-nuget.yml` pushes the signed package to
+5. Review the draft release, then publish it. `publish-nuget.yml` pushes the signed package to
    nuget.org.
 
 A manual run of `release.yml` from a branch builds unsigned test files and never signs or

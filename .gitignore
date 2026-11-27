@@ -10,6 +10,7 @@ BenchmarkDotNet.Artifacts/
 models/
 *.gguf
 *.wav
+!scripts/acceptance/audio/*.wav
 *.flac
 *.mp3
 

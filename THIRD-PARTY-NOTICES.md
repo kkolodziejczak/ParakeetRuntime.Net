@@ -11,6 +11,13 @@ ParakeetRuntime.Net's engine is a C# port of the parts of [NeMo-Speech.cpp](http
 >
 > Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
 
+## FLEURS clips (CC BY 4.0)
+
+The repository's release acceptance check (`scripts/acceptance/audio`) uses eight unchanged clips from the dev
+set of [FLEURS](https://huggingface.co/datasets/google/fleurs), © Google, licensed under
+[Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/). They are not part of the
+package or the app.
+
 ## Parakeet TDT 0.6B v3 model (CC BY 4.0)
 
 ParakeetRuntime.Net does not include a speech model. It runs NVIDIA's [parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) in Q8_0 GGUF form, which you download separately. The model is © NVIDIA and licensed under [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/).
