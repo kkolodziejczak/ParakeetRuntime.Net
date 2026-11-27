@@ -639,6 +639,30 @@ public sealed unsafe class D3D12KernelsTests
         }
     }
 
+    [GpuFact]
+    public void Timed_operations_add_up_per_operation_across_submits()
+    {
+        GpuTestSupport.ForEachHardwareAdapter(gpu =>
+        {
+            var times = gpu.TimeEveryOperation();
+            if (times is null)
+                return;
+            for (int submit = 0; submit < 2; submit++)
+            {
+                gpu.BeginCommands();
+                gpu.MarkOperationEnd("first");
+                gpu.MarkOperationEnd("second");
+                gpu.ExecuteAndWait();
+            }
+            var totals = times.Totals.ToDictionary(t => t.Operation);
+            Assert.Equal(["first", "second"], totals.Keys.Order());
+            Assert.All(totals.Values, t => Assert.Equal(2, t.Count));
+            Assert.All(totals.Values, t => Assert.True(t.Milliseconds >= 0));
+            times.Clear();
+            Assert.Empty(times.Totals);
+        });
+    }
+
     private static bool IsAnIntelIntegratedGpuName(string name) =>
         name.Contains("Intel", StringComparison.OrdinalIgnoreCase) &&
         (name.Contains("UHD", StringComparison.OrdinalIgnoreCase) || name.Contains("Iris", StringComparison.OrdinalIgnoreCase));

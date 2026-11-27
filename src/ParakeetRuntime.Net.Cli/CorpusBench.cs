@@ -55,7 +55,7 @@ internal static class CorpusBench
         var load = Stopwatch.StartNew();
         await using IBenchEngine engine = Value("--nemo") is { } nemo
             ? await NemoEngine.StartAsync(nemo, modelPath, device, Process.GetCurrentProcess().ProcessorAffinity)
-            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath, cut);
+            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath, cut, args.Contains("--gpu-operations"));
         load.Stop();
         var gpuMemory = new GpuMemory(engine.ProcessId);
         gpuMemory.Sample();
@@ -173,11 +173,11 @@ internal static class CorpusBench
         IEnumerable<string> StageReport();
     }
 
-    private sealed class LocalEngine(ParakeetModel model, Int8Path int8Path, bool cutAtQuietestPoints) : IBenchEngine
+    private sealed class LocalEngine(ParakeetModel model, Int8Path int8Path, bool cutAtQuietestPoints, GpuOperationTimes? gpuOperationTimes = null) : IBenchEngine
     {
         private double gpuEncoderMs, gpuDecoderMs;
 
-        public static LocalEngine Load(string path, string device, Int8Path int8Path, bool cutAtQuietestPoints)
+        public static LocalEngine Load(string path, string device, Int8Path int8Path, bool cutAtQuietestPoints, bool timeGpuOperations)
         {
             if (device == "cpu")
                 return new LocalEngine(new ParakeetModel(path, int8Path), int8Path, cutAtQuietestPoints);
@@ -185,7 +185,7 @@ internal static class CorpusBench
                 throw new ArgumentException($"ParakeetRuntime.Net's --device is cpu, gpu or gpu:<adapter>, not {device}.");
             var model = new ParakeetModel(path, allowGpu: true, device == "gpu" ? null : device["gpu:".Length..]);
             if (model.IsUsingGpu)
-                return new LocalEngine(model, int8Path, cutAtQuietestPoints);
+                return new LocalEngine(model, int8Path, cutAtQuietestPoints, timeGpuOperations ? model.TimeEveryGpuOperation() : null);
             model.Dispose();
             throw new InvalidOperationException($"No usable GPU matched {device}; see --list-gpus.");
         }
@@ -219,6 +219,7 @@ internal static class CorpusBench
         {
             model.BenchmarkClock = new StageClock();
             gpuEncoderMs = gpuDecoderMs = 0;
+            gpuOperationTimes?.Clear();
         }
 
         public IEnumerable<string> StageReport()
@@ -227,7 +228,13 @@ internal static class CorpusBench
                 ? [("encoder", TimeSpan.FromMilliseconds(gpuEncoderMs)), ("decoder", TimeSpan.FromMilliseconds(gpuDecoderMs))]
                 : model.BenchmarkClock!.Totals.ToList();
             var all = totals.Sum(stage => stage.Item2.TotalSeconds);
-            return totals.Select(stage => $"  {stage.Item1,-14} {stage.Item2.TotalSeconds,7:0.00} s  {100 * stage.Item2.TotalSeconds / all,5:0.0}%");
+            var stages = totals.Select(stage => $"  {stage.Item1,-14} {stage.Item2.TotalSeconds,7:0.00} s  {100 * stage.Item2.TotalSeconds / all,5:0.0}%");
+            if (gpuOperationTimes is null)
+                return stages;
+            var timed = gpuOperationTimes.Totals.ToList();
+            var gpuMs = timed.Sum(operation => operation.Milliseconds);
+            return stages.Append($"  GPU time per operation, all passes, {gpuMs / 1000:0.00} s:")
+                .Concat(timed.Select(operation => $"    {operation.Operation,-30} {operation.Milliseconds / 1000,7:0.00} s  {100 * operation.Milliseconds / gpuMs,5:0.0}%  {operation.Count,8:N0} times, {1000 * operation.Milliseconds / operation.Count,8:0.0} us each"));
         }
 
         public ValueTask DisposeAsync()

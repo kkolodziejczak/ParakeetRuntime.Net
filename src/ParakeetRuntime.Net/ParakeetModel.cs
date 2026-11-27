@@ -167,6 +167,8 @@ internal sealed unsafe class ParakeetModel : IUtteranceRecognizer
 
     internal StageClock? BenchmarkClock { get; set; }
 
+    internal GpuOperationTimes? TimeEveryGpuOperation() => gpu?.TimeEveryOperation();
+
     public void Dispose()
     {
         disposed = true;

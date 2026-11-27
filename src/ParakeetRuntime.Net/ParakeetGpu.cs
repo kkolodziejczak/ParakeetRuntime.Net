@@ -191,6 +191,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         }
     }
 
+    internal GpuOperationTimes? TimeEveryOperation() => gpu.TimeEveryOperation();
+
     private static bool IntegratedGpuIsUsedOnlyWhenNamed(string? adapterNameFilter) => !string.IsNullOrWhiteSpace(adapterNameFilter);
 
     public static ParakeetGpu? TryCreate(
@@ -679,6 +681,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         gpu.Transition(bufAudio, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         RecordLogMelSpectrogram(n, frames, valid);
+        gpu.MarkOperationEnd("mel");
 
         return RunFromFeatsInOpenCommandList(t0, H0, W0, H1, W1, H2, W2, H3, W3, T, out encMs, out decMs);
     }
@@ -747,6 +750,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         uint scaleBits = BitConverter.SingleToUInt32Bits(1f / MathF.Sqrt(dk));
 
         RecordSubsampling(H0, W0, H1, W1, H2, W2, H3, W3, T, curWide, curX);
+        gpu.MarkOperationEnd("subsampling");
         if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is null && positionsCanBeCached)
             ProjectPositionsUpTo20sInTheirOwnSubmit();
 
@@ -789,6 +793,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
         RecordQ8Gemm(curX, 0, bufEncProj!, T, jointEncWeight, GpuEpilogue.Store);
         gpu.Transition(bufEncProj!, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        gpu.MarkOperationEnd("gemm joint encoder projection");
 
         bool splitSubmits = layersPerSubmit < layers.Length;
         long tEncEnd = 0;
@@ -803,6 +808,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             gpu.WriteTimestamp(0);
 
         RecordInitDecoderState();
+        gpu.MarkOperationEnd("decoder state reset");
         double firstBatchBudgetMsLeftByEncoder = splitSubmits ? SubmitBudgetMsUnderGpuTimeout : Math.Max(SubmitBudgetMsUnderGpuTimeout - msPerLayerFrame * T * layers.Length, 0);
         int firstBatchSteps = DecodeBatchSteps(T, firstBatchBudgetMsLeftByEncoder, msPerDecodeStep);
         RecordDecodeSteps(T, firstBatchSteps);
@@ -907,11 +913,16 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private void RecordConformerLayer(int layerIndex, LayerGpu l, ref GpuBuffer curX, ref GpuBuffer curA, GpuBuffer curB, GpuBuffer curWide, int T, int P, uint peSliceByteOffset, uint scaleBits)
     {
         RecordLayerNorm(curX, curA, l.NFf1g, l.NFf1b, T);
+        gpu.MarkOperationEnd("layer norm");
         RecordQ8Gemm(curA, 0, curWide, T, l.Ff1a, GpuEpilogue.Silu);
+        gpu.MarkOperationEnd("gemm feed-forward in");
         RecordQ8Gemm(curWide, 0, curX, T, l.Ff1b, GpuEpilogue.AddHalfResidual);
+        gpu.MarkOperationEnd("gemm feed-forward out");
 
         RecordLayerNorm(curX, curA, l.NAttg, l.NAttb, T);
+        gpu.MarkOperationEnd("layer norm");
         RecordQ8Gemm(curA, 0, curWide, T, l.Qkv, GpuEpilogue.Store);
+        gpu.MarkOperationEnd("gemm q k v");
         if (T <= MostFramesReadingTheCachedPositions && projectedPositionsUpTo20s is not null)
         {
             ulong rowOfPositionTMinus1 = (ulong)(MostFramesReadingTheCachedPositions - T);
@@ -920,21 +931,33 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         else
         {
             RecordQ8GemmFromStatic(floatMega, peOffset, peSliceByteOffset, curB, P, l.Pos, GpuEpilogue.Store);
+            gpu.MarkOperationEnd("gemm positions");
             RecordAttention(curWide, curB, 0, curA, l.U, l.V, T, scaleBits);
         }
+        gpu.MarkOperationEnd("attention");
         RecordQ8Gemm(curA, 0, curX, T, l.Outp, GpuEpilogue.AddResidual);
+        gpu.MarkOperationEnd("gemm attention out");
 
         RecordLayerNorm(curX, curA, l.NConvg, l.NConvb, T);
+        gpu.MarkOperationEnd("layer norm");
         RecordQ8Gemm(curA, 0, curWide, T, l.Pw1, GpuEpilogue.Store);
+        gpu.MarkOperationEnd("gemm pointwise conv 1");
         RecordGlu(curWide, curA, T);
+        gpu.MarkOperationEnd("glu");
         RecordDepthwiseConvBnSilu(curA, curB, l.Dw, l.BnScale, l.BnShift, T);
+        gpu.MarkOperationEnd("depthwise conv");
         RecordQ8Gemm(curB, 0, curX, T, l.Pw2, GpuEpilogue.AddResidual);
+        gpu.MarkOperationEnd("gemm pointwise conv 2");
 
         RecordLayerNorm(curX, curA, l.NFf2g, l.NFf2b, T);
+        gpu.MarkOperationEnd("layer norm");
         RecordQ8Gemm(curA, 0, curWide, T, l.Ff2a, GpuEpilogue.Silu);
+        gpu.MarkOperationEnd("gemm feed-forward in");
         RecordQ8Gemm(curWide, 0, curX, T, l.Ff2b, GpuEpilogue.AddHalfResidual);
+        gpu.MarkOperationEnd("gemm feed-forward out");
 
         RecordLayerNorm(curX, curA, l.NOutg, l.NOutb, T);
+        gpu.MarkOperationEnd("layer norm");
         (curX, curA) = (curA, curX);
     }
 
@@ -964,9 +987,13 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         for (int step = 0; step < steps; step++)
         {
             RecordLstmLayers(tLim, lstmGroups, barriers);
+            gpu.MarkOperationEnd("decoder lstm");
             RecordJointPred(tLim, predGroups, barriers);
+            gpu.MarkOperationEnd("decoder joint prediction");
             RecordJointOutWithFusedRelu(tLim, outGroups, barriers);
+            gpu.MarkOperationEnd("decoder joint output");
             RecordArgMaxAndStep(tLim, barriers);
+            gpu.MarkOperationEnd("decoder argmax and step");
         }
     }
 

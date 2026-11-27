@@ -74,6 +74,8 @@ internal sealed unsafe class D3D12Device : IDisposable
     private const int RootSrvCount = 6;
     private const int RootUavCount = 2;
     private const int RootParameterCount = 9;
+    private const uint SlotsOfTheEncoderDecoderSplit = 2;
+    private const int TimedOperationSlots = 4096;
 
     private nint adapter;
     private nint adapter3;
@@ -90,6 +92,9 @@ internal sealed unsafe class D3D12Device : IDisposable
     private ulong fenceValue;
     private bool listOpen;
     private bool disposed;
+    private GpuOperationTimes? operationTimes;
+    private GpuBuffer? operationTimestampsReadback;
+    private readonly List<string> operationsEndingAtSlot = [];
 
     public string AdapterName { get; }
     public long DedicatedVideoMemoryBytes { get; }
@@ -324,7 +329,7 @@ internal sealed unsafe class D3D12Device : IDisposable
             rs = CreateUniversalRootSignature(dev);
 
             ulong tsFreq = 0;
-            var qhDesc = new D3D12_QUERY_HEAP_DESC { Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count = 4, NodeMask = 0 };
+            var qhDesc = new D3D12_QUERY_HEAP_DESC { Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count = SlotsOfTheEncoderDecoderSplit + TimedOperationSlots, NodeMask = 0 };
             var qhIid = IID_ID3D12QueryHeap;
             if (CreateQueryHeap(dev, &qhDesc, &qhIid, &tsHeap) >= 0 && tsHeap != 0)
             {
@@ -542,6 +547,37 @@ internal sealed unsafe class D3D12Device : IDisposable
         currentAllocator = next;
         SetComputeRootSignature(commandList, rootSignature);
         listOpen = true;
+        MarkOperationEnd("before the first operation");
+    }
+
+    public GpuOperationTimes? TimeEveryOperation()
+    {
+        if (!HasTimestamps)
+            return null;
+        operationTimestampsReadback ??= CreateReadbackBuffer(TimedOperationSlots * sizeof(ulong));
+        return operationTimes ??= new GpuOperationTimes();
+    }
+
+    public void MarkOperationEnd(string operation)
+    {
+        if (operationTimes is null || operationsEndingAtSlot.Count >= TimedOperationSlots)
+            return;
+        EndQuery(commandList, timestampHeap, D3D12_QUERY_TYPE_TIMESTAMP, SlotsOfTheEncoderDecoderSplit + (uint)operationsEndingAtSlot.Count);
+        operationsEndingAtSlot.Add(operation);
+    }
+
+    private void AddTheTimedOperationsOf(string[] operations)
+    {
+        var ticks = (ulong*)operationTimestampsReadback!.Map(forRead: true);
+        try
+        {
+            for (int slot = 1; slot < operations.Length; slot++)
+                operationTimes!.Add(operations[slot], ticks[slot] > ticks[slot - 1] ? (ticks[slot] - ticks[slot - 1]) * 1000.0 / TimestampFrequency : 0);
+        }
+        finally
+        {
+            operationTimestampsReadback.Unmap(wasWritten: false);
+        }
     }
 
     public void Transition(GpuBuffer buffer, uint newState)
@@ -614,14 +650,21 @@ internal sealed unsafe class D3D12Device : IDisposable
 
     public void ExecuteAndWait()
     {
-        if (listOpen)
-            WaitFor(Submit());
+        if (!listOpen)
+            return;
+        string[] timedOperations = [.. operationsEndingAtSlot];
+        if (timedOperations.Length > 1)
+            ResolveQueryData(commandList, timestampHeap, D3D12_QUERY_TYPE_TIMESTAMP, SlotsOfTheEncoderDecoderSplit, (uint)timedOperations.Length, operationTimestampsReadback!.Resource, 0);
+        WaitFor(Submit());
+        if (timedOperations.Length > 1)
+            AddTheTimedOperationsOf(timedOperations);
     }
 
     public ulong Submit()
     {
         if (!listOpen)
             throw new InvalidOperationException("No command list is open.");
+        operationsEndingAtSlot.Clear();
         listOpen = false;
         CheckHr(ListClose(commandList));
         nint list = commandList;
@@ -703,6 +746,7 @@ internal sealed unsafe class D3D12Device : IDisposable
         if (disposed)
             return;
         disposed = true;
+        operationTimestampsReadback?.Dispose();
         if (fenceEvent != 0)
         {
             CloseHandle(fenceEvent);

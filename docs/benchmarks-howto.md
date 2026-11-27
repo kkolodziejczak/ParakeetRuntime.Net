@@ -15,7 +15,7 @@ parakeet-runtime --list-gpus
 parakeet-runtime --corpus <list.txt | wav folder> [--device cpu|gpu|gpu:<adapter>|vulkan:N] [--nemo nemo-speech.exe]
                  [--affinity C03] [--passes N] [--out hyp.tsv] [--reference dev.tsv] [--compare other-hyp.tsv]
                  [--model parakeet.gguf] [--max-seconds S] [--limit N] [--int8-path Avx2|AvxVnni|...] [--threads N]
-                 [--results matrix.tsv] [--cut]
+                 [--results matrix.tsv] [--cut] [--gpu-operations]
 ```
 
 `--list-gpus` prints every DXGI adapter with its memory, whether it is a software adapter, and
@@ -24,7 +24,7 @@ whether it has enough memory for the engine.
 | Option | Meaning |
 | --- | --- |
 | `--corpus` | A list file with one WAV path per line, or a folder of WAVs (taken in name order). Every clip must be 16 kHz mono. |
-| `--device` | Without `--nemo`: `cpu` (the default), `gpu` (the adapter the engine picks on its own), or `gpu:<part of the adapter name from --list-gpus>`. The run stops if that GPU is not used. With `--nemo`, the value is passed on to NeMo-Speech.cpp (`cpu` or `vulkan:N`). |
+| `--device` | Without `--nemo`: `cpu` (the default), `gpu` (the adapter the engine picks on its own, never an integrated one), or `gpu:<part of the adapter name from --list-gpus>`. The run stops if that GPU is not used. With `--nemo`, the value is passed on to NeMo-Speech.cpp (`cpu` or `vulkan:N`). |
 | `--nemo` | Runs NeMo-Speech.cpp's `serve` command instead of ParakeetRuntime.Net, on the same model and the same `--affinity` mask but with `--threads 1`, over its HTTP API. Its load time counts until `/ready` answers, which includes the server's own warmup. |
 | `--affinity` | A hex mask of the CPUs to run on, for example `C03` for CPUs 0, 1, 10 and 11. Pick cores of one kind, so runs are comparable. |
 | `--passes` | How many times every clip is transcribed. Each pass prints its time; the best pass is the one reported in `--results`. |
@@ -38,6 +38,7 @@ whether it has enough memory for the engine.
 | `--threads` | Overrides the CPU thread budget (by default one thread per fast core the process may run on, at most 8). |
 | `--results` | Appends one summary row per run to a TSV, with a header when the file is new. `Run-Matrix.ps1` uses it. |
 | `--cut` | Cuts clips longer than 20 s at their quietest points, as `SpeechEngine.TranscribeAsync` does (see [Long audio](model-and-decoding.md#long-audio)). Without it, each clip is one model call. Not with `--nemo`. |
+| `--gpu-operations` | With a GPU: writes a GPU timestamp after every operation (each GEMM, layer norm, attention, decoder step part) and prints the GPU time per operation over all passes. The timestamps cost a few percent, so time speed in a run without it. |
 
 What a run does and prints:
 

@@ -1169,3 +1169,39 @@ All eight together, baseline against final:
   UHD run also held 965 MB of system memory after load.
 - The desktop's records agree: Intel iGPU RTF 0.030 against CPU 0.0147–0.0150 (2026-11-23).
 - So `SpeechEngine` now skips integrated GPUs unless `GpuNameContains` names one.
+
+## 2026-11-27 · GPU time per operation on the MX450
+
+- **Machine:** Intel Core i7-11850H laptop, NVIDIA GeForce MX450 2 GB (driver 596.71), on mains power
+- **Commit:** the commit that adds this record (`--gpu-operations`, after `b65064a`)
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** the laptop corpus, `en_us/wav16`, 150 clips of 20 s or less (1,436.8 s, 9.6 s on average)
+- **Command:** `parakeet-runtime --corpus <list> --reference <dev.tsv> --max-seconds 20 --passes 1 --device gpu:MX450 --affinity 5500 --gpu-operations`
+
+RTF 0.01887 with the timestamps (0.0177 without them, same day); transcripts identical in 150 of 150 clips.
+
+| Operation | GPU time | Share | Each |
+| --- | --- | --- | --- |
+| GEMM feed-forward in (1024 → 4096, twice a layer) | 8.41 s | 31.5% | 1,167 µs |
+| GEMM feed-forward out (4096 → 1024, twice a layer) | 7.48 s | 28.0% | 1,038 µs |
+| GEMM q k v | 2.90 s | 10.9% | 806 µs |
+| GEMM pointwise conv 1 | 1.75 s | 6.6% | 486 µs |
+| Decoder LSTM (both layers, one step) | 1.07 s | 4.0% | 84.5 µs |
+| GEMM attention out | 0.88 s | 3.3% | 245 µs |
+| GEMM pointwise conv 2 | 0.87 s | 3.3% | 241 µs |
+| Decoder joint output | 0.85 s | 3.2% | 67.0 µs |
+| Attention | 0.82 s | 3.1% | 229 µs |
+| Subsampling | 0.72 s | 2.7% | 4,824 µs |
+| Layer norm | 0.32 s | 1.2% | 17.8 µs |
+| Mel | 0.17 s | 0.6% | 1,121 µs |
+| Everything else (decoder joint prediction, argmax, depthwise conv, GLU, joint encoder projection, state reset) | 0.44 s | 1.6% | |
+
+- The encoder's Q8 GEMMs are 83.6% of the GPU time. Their time follows their FLOPs: feed-forward in
+  and out do the same work and take 1,167 and 1,038 µs.
+- The decoder's two large parts read their weights at about the card's memory rate: the LSTM's
+  2 × 4 × 640 × 1,280 int8 weights (6.6 MB) in 84.5 µs, and the joint output's 8,198 × 640 (5.2 MB)
+  in 67 µs, both near 80 GB/s. Fewer dispatches would not make them faster here.
+- Layer norm, GLU and depthwise conv together are 1.9%; fusing them can't gain more than that.
+- At 1,167 µs, one feed-forward-in GEMM does 2 × 120 × 4,096 × 1,024 = 1.0 GFLOP: 0.86 TFLOP/s.
+  `--gemm-bench` at T = 120 gets 1.4 TFLOP/s from the same kernel, so the corpus run loses about a
+  third somewhere (clocks under a sustained load, the timestamps, or cold caches); not traced.
