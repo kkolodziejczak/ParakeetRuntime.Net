@@ -27,7 +27,7 @@ curl.exe -F file=@hello.wav http://127.0.0.1:5092/v1/audio/transcriptions
 
 In Windows PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, so type `curl.exe`.
 
-`transcribe`, `record`, and `serve` accept `--device cpu`, `--device gpu`, or `--device gpu:<part of the adapter's name>`. Leave `--device` off and the app picks a usable GPU, falling back to the CPU. Transcript text goes to standard output; status and error messages go to standard error. Run `.\parakeet-runtime.exe --help` to list every command and flag.
+`transcribe`, `record`, and `serve` accept `--device cpu`, `--device gpu`, or `--device gpu:<part of the adapter's name>`. Leave `--device` off, or pass `--device gpu`, and the app picks a usable discrete GPU, falling back to the CPU; an integrated GPU is used only when you name it, as in `--device gpu:UHD`. Transcript text goes to standard output; status and error messages go to standard error. Run `.\parakeet-runtime.exe --help` to list every command and flag.
 
 WAV format limits, long-audio splitting, and language detection are the same as in the library; see [What to expect](library.md#what-to-expect).
 

@@ -27,6 +27,9 @@ computes the features, and the GPU runs the rest.
   exists, so a discrete GPU comes before an integrated one. Older systems fall back to
   `IDXGIFactory1::EnumAdapters1`.
 - Software adapters (WARP, the Basic Render Driver) are rejected.
+- Integrated GPUs (`D3D12_FEATURE_ARCHITECTURE` reports `UMA`) are skipped unless the caller names
+  an adapter (`GpuNameContains`, `--device gpu:<name>`). The CPU path beat them on both machines
+  measured; see the 2026-11-27 record in [benchmarks.md](benchmarks.md).
 - An adapter must have at least `DefaultMinimumMemoryBytes` of memory. The estimate starts as the
   larger of `DedicatedVideoMemory` and `SharedSystemMemory`, because an integrated GPU has little
   dedicated memory and works from shared system memory. When `IDXGIAdapter3` is available, its

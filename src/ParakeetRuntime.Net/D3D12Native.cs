@@ -89,6 +89,17 @@ internal static unsafe class D3D12Native
         public int HighPart;
     }
 
+    public const uint D3D12_FEATURE_ARCHITECTURE = 1;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct D3D12_FEATURE_DATA_ARCHITECTURE
+    {
+        public uint NodeIndex;
+        public int TileBasedRenderer;
+        public int UMA;
+        public int CacheCoherentUMA;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct DXGI_ADAPTER_DESC1
     {
@@ -281,6 +292,9 @@ internal static unsafe class D3D12Native
 
     public static nuint GetBufferSize(nint blob) =>
         ((delegate* unmanaged[Stdcall]<nint, nuint>)Vtbl(blob)[4])(blob);
+
+    public static int CheckFeatureSupport(nint device, uint feature, void* pData, uint dataSize) =>
+        ((delegate* unmanaged[Stdcall]<nint, uint, void*, uint, int>)Vtbl(device)[13])(device, feature, pData, dataSize);
 
     public static int CreateCommandQueue(nint device, D3D12_COMMAND_QUEUE_DESC* desc, Guid* riid, nint* ppQueue) =>
         ((delegate* unmanaged[Stdcall]<nint, D3D12_COMMAND_QUEUE_DESC*, Guid*, nint*, int>)Vtbl(device)[8])(device, desc, riid, ppQueue);

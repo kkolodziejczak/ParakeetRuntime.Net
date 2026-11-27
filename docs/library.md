@@ -31,7 +31,7 @@ string spoken = await engine.TranscribeAsync(samples);
 
 `TranscribeWavAsync` takes either a file path or a `Stream`. Non-seekable streams work and are left open. If you already have raw PCM in memory, `TranscribeAsync(float[])` takes 16 kHz mono samples in the range -1 to 1, of any length.
 
-By default, `SpeechEngine.LoadAsync` picks a usable GPU and falls back to the CPU if none is available. Pass `new SpeechEngineOptions(UseGpu: false)` to stay on the CPU, or `new SpeechEngineOptions(GpuNameContains: "RTX")` to prefer a GPU whose name contains `"RTX"` (still falling back to the CPU if no matching GPU is usable). Check `engine.Backend` to see where the model landed and `engine.IsUsingGpu` to test whether a GPU is active.
+By default, `SpeechEngine.LoadAsync` picks a usable discrete GPU and falls back to the CPU if there isn't one. It skips integrated GPUs, because on both machines we measured the CPU path beat them (see [benchmarks.md](benchmarks.md)); name one with `GpuNameContains`, for example `"UHD"`, to use it anyway. Pass `new SpeechEngineOptions(UseGpu: false)` to stay on the CPU, or `new SpeechEngineOptions(GpuNameContains: "RTX")` to prefer a GPU whose name contains `"RTX"` (still falling back to the CPU if no matching GPU is usable). Check `engine.Backend` to see where the model landed and `engine.IsUsingGpu` to test whether a GPU is active.
 
 To keep the model outside `%LOCALAPPDATA%\ParakeetRuntime\models`, construct `new SpeechModel(folder, SpeechModel.Parakeet)`. On an offline machine, call `model.InstallFromFileAsync(path, progress, cancellationToken)` on a file you downloaded yourself; it verifies the SHA-256 before marking the model installed. See [the speech model](speech-model.md) for the file URL and hash.
 

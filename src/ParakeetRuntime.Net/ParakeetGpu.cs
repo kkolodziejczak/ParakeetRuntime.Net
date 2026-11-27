@@ -191,6 +191,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
         }
     }
 
+    private static bool IntegratedGpuIsUsedOnlyWhenNamed(string? adapterNameFilter) => !string.IsNullOrWhiteSpace(adapterNameFilter);
+
     public static ParakeetGpu? TryCreate(
         Gguf g, Mel mel, int layersN, int d, int heads, int ff, int kernel, int subCh,
         int predH, int predLayers, int vocab, int blank, int maxSymbols, int[] durations,
@@ -202,7 +204,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             predH <= 0 || predH > 1024 || predH % 32 != 0 || predLayers <= 0 ||
             vocab <= 0 || blank < 0 || blank >= vocab || durations.Length is 0 or > 8 || maxSymbols <= 0)
             return null;
-        var gpu = D3D12Device.TryCreate(adapterNameFilter: adapterNameFilter);
+        var gpu = D3D12Device.TryCreate(adapterNameFilter: adapterNameFilter, integratedGpuAllowed: IntegratedGpuIsUsedOnlyWhenNamed(adapterNameFilter));
         if (gpu is null)
             return null;
 

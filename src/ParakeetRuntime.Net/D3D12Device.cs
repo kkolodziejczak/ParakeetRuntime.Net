@@ -95,18 +95,20 @@ internal sealed unsafe class D3D12Device : IDisposable
     public long DedicatedVideoMemoryBytes { get; }
     public long SharedSystemMemoryBytes { get; }
     public ulong TimestampFrequency { get; }
+    public bool IsIntegrated { get; }
     public bool HasTimestamps => timestampHeap != 0 && TimestampFrequency > 0;
     public nint CommandList => commandList;
     public nint RootSignature => rootSignature;
 
     private D3D12Device(
-        string adapterName, long dedicatedVram, long sharedMem,
+        string adapterName, long dedicatedVram, long sharedMem, bool isIntegrated,
         nint adapter, nint adapter3, nint device, nint queue,
         nint[] allocators, nint commandList, nint fence, nint fenceEvent, nint rootSignature,
         nint timestampHeap, ulong timestampFrequency)
     {
         fenceValueWhenAllocatorIsFree = new ulong[allocators.Length];
         AdapterName = adapterName;
+        IsIntegrated = isIntegrated;
         DedicatedVideoMemoryBytes = dedicatedVram;
         SharedSystemMemoryBytes = sharedMem;
         TimestampFrequency = timestampFrequency;
@@ -193,13 +195,13 @@ internal sealed unsafe class D3D12Device : IDisposable
         return result;
     }
 
-    public static D3D12Device? TryCreate(long minimumMemoryBytes = DefaultMinimumMemoryBytes, string? adapterNameFilter = null)
+    public static D3D12Device? TryCreate(long minimumMemoryBytes = DefaultMinimumMemoryBytes, string? adapterNameFilter = null, bool integratedGpuAllowed = true)
     {
         if (!OperatingSystem.IsWindows())
             return null;
         try
         {
-            return CreateCore(minimumMemoryBytes, adapterNameFilter);
+            return CreateCore(minimumMemoryBytes, adapterNameFilter, integratedGpuAllowed);
         }
         catch
         {
@@ -207,7 +209,7 @@ internal sealed unsafe class D3D12Device : IDisposable
         }
     }
 
-    private static D3D12Device? CreateCore(long minimumMemoryBytes, string? adapterNameFilter)
+    private static D3D12Device? CreateCore(long minimumMemoryBytes, string? adapterNameFilter, bool integratedGpuAllowed)
     {
         var factoryIid = IID_IDXGIFactory1;
         nint factory = 0;
@@ -236,7 +238,7 @@ internal sealed unsafe class D3D12Device : IDisposable
                 if (hr == DXGI_ERROR_NOT_FOUND || hr < 0 || candidate == 0)
                     break;
 
-                var created = TryCreateOnAdapter(candidate, minimumMemoryBytes, adapterNameFilter);
+                var created = TryCreateOnAdapter(candidate, minimumMemoryBytes, adapterNameFilter, integratedGpuAllowed);
                 if (created is not null)
                     return created;
                 Release(candidate);
@@ -250,7 +252,7 @@ internal sealed unsafe class D3D12Device : IDisposable
         }
     }
 
-    private static D3D12Device? TryCreateOnAdapter(nint candidate, long minimumMemoryBytes, string? adapterNameFilter)
+    private static D3D12Device? TryCreateOnAdapter(nint candidate, long minimumMemoryBytes, string? adapterNameFilter, bool integratedGpuAllowed)
     {
         DXGI_ADAPTER_DESC1 desc;
         if (GetDesc1(candidate, &desc) < 0)
@@ -292,6 +294,14 @@ internal sealed unsafe class D3D12Device : IDisposable
                 return null;
             }
 
+            bool isIntegrated = SharesMemoryWithTheCpu(dev);
+            if (isIntegrated && !integratedGpuAllowed)
+            {
+                SafeRelease(ref dev);
+                SafeRelease(ref adapter3);
+                return null;
+            }
+
             var qDesc = new D3D12_COMMAND_QUEUE_DESC { Type = D3D12_COMMAND_LIST_TYPE_DIRECT };
             var qIid = IID_ID3D12CommandQueue;
             CheckHr(CreateCommandQueue(dev, &qDesc, &qIid, &q));
@@ -326,7 +336,7 @@ internal sealed unsafe class D3D12Device : IDisposable
             }
 
             var result = new D3D12Device(
-                adapterName, dedicated, shared,
+                adapterName, dedicated, shared, isIntegrated,
                 candidate, adapter3, dev, q, [alloc, secondAlloc], list, f, ev, rs, tsHeap, tsFreq);
             adapter3 = dev = q = alloc = secondAlloc = list = f = rs = tsHeap = ev = 0;
             return result;
@@ -345,6 +355,13 @@ internal sealed unsafe class D3D12Device : IDisposable
             SafeRelease(ref adapter3);
             return null;
         }
+    }
+
+    private static bool SharesMemoryWithTheCpu(nint dev)
+    {
+        var architecture = new D3D12_FEATURE_DATA_ARCHITECTURE();
+        return CheckFeatureSupport(dev, D3D12_FEATURE_ARCHITECTURE, &architecture, (uint)sizeof(D3D12_FEATURE_DATA_ARCHITECTURE)) >= 0
+            && architecture.UMA != 0;
     }
 
     private static nint CreateUniversalRootSignature(nint dev)

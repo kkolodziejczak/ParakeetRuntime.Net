@@ -624,6 +624,25 @@ public sealed unsafe class D3D12KernelsTests
         Assert.Null(missing);
     }
 
+    [GpuFact]
+    public void An_integrated_gpu_is_used_only_when_allowed()
+    {
+        foreach (var adapter in GpuTestSupport.Adapters)
+        {
+            using var allowed = D3D12Device.TryCreate(adapterNameFilter: adapter.Name, integratedGpuAllowed: true);
+            if (allowed is null)
+                continue;
+            using var notAllowed = D3D12Device.TryCreate(adapterNameFilter: adapter.Name, integratedGpuAllowed: false);
+            Assert.Equal(allowed.IsIntegrated, notAllowed is null);
+            if (IsAnIntelIntegratedGpuName(adapter.Name))
+                Assert.True(allowed.IsIntegrated, $"{adapter.Name} is an integrated GPU.");
+        }
+    }
+
+    private static bool IsAnIntelIntegratedGpuName(string name) =>
+        name.Contains("Intel", StringComparison.OrdinalIgnoreCase) &&
+        (name.Contains("UHD", StringComparison.OrdinalIgnoreCase) || name.Contains("Iris", StringComparison.OrdinalIgnoreCase));
+
     private sealed class Q8GpuLinearProbe : IDisposable
     {
         private readonly D3D12Device gpu;

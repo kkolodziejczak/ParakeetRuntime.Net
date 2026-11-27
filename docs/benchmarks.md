@@ -1150,3 +1150,22 @@ All eight together, baseline against final:
 - Same run of `long60` before the change, for scale: RTF 0.02051–0.02065, 44 MB shared. The 2-minute
   files now cost about what their extra attention work predicts.
 - Only uncut audio over 20 s reached this: `SpeechEngine` cuts audio into pieces of 20 s or less.
+
+## 2026-11-27 · Integrated GPU against the CPU path, and the default device
+
+- **Machine:** Intel Core i7-11850H laptop (8 cores, 16 threads), Intel UHD Graphics (driver 32.0.101.7088), on mains power
+- **Commit:** `7fcf7b7`
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** the laptop corpus, `en_us/wav16`, the first 50 clips of 20 s or less (481.8 s)
+- **Command:** `parakeet-runtime --corpus <list> --reference <dev.tsv> --max-seconds 20 --limit 50 --passes 2 --device <device> [--affinity 5500]`
+
+| Device | Affinity | RTF, pass 2 | WER |
+| --- | --- | --- | --- |
+| Intel UHD | 5500 (4 cores) | 0.09328 | 6.65% |
+| CPU, 4 threads | 5500 (4 cores) | 0.08298 | 6.65% |
+| CPU, 8 threads (the library's default) | none | 0.07695 | 6.65% |
+
+- The CPU path is 12% faster than the UHD on 4 cores and 21% faster with its default threads. The
+  UHD run also held 965 MB of system memory after load.
+- The desktop's records agree: Intel iGPU RTF 0.030 against CPU 0.0147–0.0150 (2026-11-23).
+- So `SpeechEngine` now skips integrated GPUs unless `GpuNameContains` names one.
