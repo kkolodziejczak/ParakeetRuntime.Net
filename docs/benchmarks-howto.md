@@ -38,7 +38,7 @@ whether it has enough memory for the engine.
 | `--threads` | Overrides the CPU thread budget (by default one thread per fast core the process may run on, at most 8). |
 | `--results` | Appends one summary row per run to a TSV, with a header when the file is new. `Run-Matrix.ps1` uses it. |
 | `--cut` | Cuts clips longer than 20 s at their quietest points, as `SpeechEngine.TranscribeAsync` does (see [Long audio](model-and-decoding.md#long-audio)). Without it, each clip is one model call. Not with `--nemo`. |
-| `--gpu-operations` | With a GPU: writes a GPU timestamp after every operation (each GEMM, layer norm, attention, decoder step part) and prints the GPU time per operation over all passes. The timestamps cost a few percent, so time speed in a run without it. |
+| `--gpu-operations` | With a GPU: writes a GPU timestamp after every operation (each GEMM, layer norm, attention, decoder step part) and prints the GPU time per operation over all passes. Mel and subsampling are one interval each, and the copy of the decoder state back to the CPU after the last decoder step is not counted. Decoder counts are dispatches, including ones that return at once. The timestamps cost a few percent, so time speed in a run without it. Stops with an error on the CPU, with `--nemo`, or on a GPU without timestamps. |
 
 What a run does and prints:
 

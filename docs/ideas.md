@@ -45,9 +45,11 @@ marked as estimates where nothing was timed. When an idea is built or rejected, 
   there with `--gemm-bench --frames 48,64,80,96`.
 - At 120 rows and 1,024 outputs the 64 × 64 tile starts 32 thread groups, under half of the RTX
   5070 Ti's 70 multiprocessors. Split-K, or the small tile, may fill it. Desktop only.
-- On the MX450 the decoder's LSTM and joint output already read their weights at about the memory
-  rate (2026-11-27 record), so one dispatch per batch would not help there. On the RTX the decoder's
-  share has never been recorded: run `--gpu-operations` there first.
+- The decoder is 8% of GPU time on the MX450 (2026-11-27 record). Whether one dispatch per batch
+  would help is open: the per-operation counts include dispatches that return at once (no
+  prediction needed, or past the end of the clip), so they don't show how long the working ones
+  take. Count the working steps first. On the RTX the decoder's share has never been recorded: run
+  `--gpu-operations` there.
 
 ### GPU subsampling in strips
 

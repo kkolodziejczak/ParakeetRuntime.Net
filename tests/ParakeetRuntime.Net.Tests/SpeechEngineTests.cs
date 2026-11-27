@@ -18,8 +18,8 @@ internal sealed class InstalledModelAndGpuFactAttribute : FactAttribute
     {
         if (!SpeechModel.Default().IsInstalled)
             Skip = "The speech model is not installed on this machine.";
-        else if (!GpuTestSupport.HasHardwareGpu)
-            Skip = "No eligible hardware D3D12 GPU available on this machine.";
+        else if (!GpuTestSupport.HasDiscreteGpu)
+            Skip = "No eligible discrete D3D12 GPU available on this machine.";
     }
 }
 
@@ -32,6 +32,33 @@ public sealed class SpeechEngineTests
 
         Assert.False(engine.IsUsingGpu);
         Assert.StartsWith("CPU", engine.Backend);
+    }
+
+    [InstalledModelFact]
+    public async Task An_engine_loaded_with_defaults_never_runs_on_an_integrated_gpu()
+    {
+        using var engine = await SpeechEngine.LoadAsync(SpeechModel.Default());
+
+        if (engine.IsUsingGpu)
+        {
+            using var sameAdapter = D3D12Device.TryCreate(adapterNameFilter: engine.Backend["GPU: ".Length..].Split(" (")[0], integratedGpuAllowed: false);
+            Assert.NotNull(sameAdapter);
+        }
+    }
+
+    [InstalledModelFact]
+    public async Task An_engine_runs_on_an_integrated_gpu_when_the_caller_names_it()
+    {
+        foreach (var adapter in GpuTestSupport.Adapters)
+        {
+            using var device = D3D12Device.TryCreate(adapterNameFilter: adapter.Name);
+            if (device is not { IsIntegrated: true })
+                continue;
+            device.Dispose();
+            using var engine = await SpeechEngine.LoadAsync(SpeechModel.Default(), new SpeechEngineOptions(GpuNameContains: adapter.Name));
+            Assert.True(engine.IsUsingGpu);
+            Assert.Contains(adapter.Name, engine.Backend);
+        }
     }
 
     [InstalledModelAndGpuFact]

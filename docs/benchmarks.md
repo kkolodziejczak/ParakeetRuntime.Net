@@ -1248,3 +1248,16 @@ Rejected, `--gemm-bench` on the MX450 against the shipped 64 × 64 kernel, bits 
 - GPU clocks during a corpus run and during `--gemm-bench` (`nvidia-smi`, 250 ms samples): 1,719 and
   1,800 MHz, memory 5,000 MHz both. Clocks do not explain the corpus GEMMs running slower than the
   bench; the tile choice for short clips does part of it.
+
+## 2026-11-27 · Correction to "GPU time per operation on the MX450"
+
+- The decoder's counts in that record (12,635 each) are recorded dispatches, not working steps.
+  `LstmLayerCondMain` returns at once when no prediction is needed or the clip has ended
+  (`DecoderOps.hlsl:88`), and the joint products return once the clip has ended (`:210-211`). So the
+  84.5 µs and 67.0 µs averages mix working dispatches with ones that do nothing.
+- The record's conclusion that the LSTM and the joint output read their weights at about the card's
+  memory rate, and that fewer dispatches would not make them faster, does not follow from these
+  numbers and is withdrawn. Found by the 2026-11-27 review (Sol).
+- The record also left out the one-off submit that builds the positions table on the first
+  utterance of 20 s or less; `--gpu-operations` now reports it as "positions table, once". In that
+  run the warm-up clip built it, so the shares in the table are unchanged.

@@ -2,7 +2,7 @@ namespace ParakeetRuntime.Net;
 
 internal static class QuietestPointCutter
 {
-    private const int LongestPiece = 20 * Wav.SampleRate;
+    internal const int LongestPiece = 20 * Wav.SampleRate;
     private const int FrameSamples = Wav.SampleRate * 30 / 1000;
     private const int QuietWindowFrames = 10;
     private const int FramesInLongestPiece = LongestPiece / FrameSamples;

@@ -8,7 +8,15 @@ internal static class GpuTestSupport
     private static readonly Lazy<List<GpuAdapterInfo>> EligibleAdapters = new(() =>
         D3D12Device.EnumerateAdapters().Where(a => a.MeetsMinimumMemory).ToList());
 
+    private static readonly Lazy<bool> AnyDiscreteGpu = new(() => EligibleAdapters.Value.Any(adapter =>
+    {
+        using var gpu = D3D12Device.TryCreate(adapterNameFilter: adapter.Name, integratedGpuAllowed: false);
+        return gpu is not null;
+    }));
+
     public static bool HasHardwareGpu => EligibleAdapters.Value.Count > 0;
+
+    public static bool HasDiscreteGpu => AnyDiscreteGpu.Value;
 
     public static IReadOnlyList<GpuAdapterInfo> Adapters => EligibleAdapters.Value;
 
@@ -647,17 +655,23 @@ public sealed unsafe class D3D12KernelsTests
             var times = gpu.TimeEveryOperation();
             if (times is null)
                 return;
+            const ulong SixtyFourMegabytes = 64UL << 20;
+            using var source = gpu.CreateDefaultBuffer(SixtyFourMegabytes, allowUav: false);
+            using var destination = gpu.CreateDefaultBuffer(SixtyFourMegabytes, allowUav: false);
             for (int submit = 0; submit < 2; submit++)
             {
                 gpu.BeginCommands();
-                gpu.MarkOperationEnd("first");
-                gpu.MarkOperationEnd("second");
+                gpu.MarkOperationEnd("nothing");
+                gpu.Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                gpu.Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST);
+                CopyBufferRegion(gpu.CommandList, destination.Resource, 0, source.Resource, 0, SixtyFourMegabytes);
+                gpu.MarkOperationEnd("copy");
                 gpu.ExecuteAndWait();
             }
             var totals = times.Totals.ToDictionary(t => t.Operation);
-            Assert.Equal(["first", "second"], totals.Keys.Order());
+            Assert.Equal(["copy", "nothing"], totals.Keys.Order());
             Assert.All(totals.Values, t => Assert.Equal(2, t.Count));
-            Assert.All(totals.Values, t => Assert.True(t.Milliseconds >= 0));
+            Assert.True(totals["copy"].Milliseconds > totals["nothing"].Milliseconds);
             times.Clear();
             Assert.Empty(times.Totals);
         });

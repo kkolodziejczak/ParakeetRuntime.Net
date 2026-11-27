@@ -48,6 +48,9 @@ internal static class CorpusBench
         var cut = args.Contains("--cut");
         if (cut && Value("--nemo") is not null)
             throw new ArgumentException("--cut runs only on ParakeetRuntime.Net, not with --nemo.");
+        var timeGpuOperations = args.Contains("--gpu-operations");
+        if (timeGpuOperations && Value("--nemo") is not null)
+            throw new ArgumentException("--gpu-operations runs only on ParakeetRuntime.Net, not with --nemo.");
         var modelPath = Value("--model") ?? SpeechModel.Default().Path;
         var device = Value("--device") ?? "cpu";
         var audioSeconds = clips.Sum(clip => clip.Seconds);
@@ -55,7 +58,7 @@ internal static class CorpusBench
         var load = Stopwatch.StartNew();
         await using IBenchEngine engine = Value("--nemo") is { } nemo
             ? await NemoEngine.StartAsync(nemo, modelPath, device, Process.GetCurrentProcess().ProcessorAffinity)
-            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath, cut, args.Contains("--gpu-operations"));
+            : LocalEngine.Load(modelPath, device, Value("--int8-path") is { } path ? Enum.Parse<Int8Path>(path) : Kernels.BestPath, cut, timeGpuOperations);
         load.Stop();
         var gpuMemory = new GpuMemory(engine.ProcessId);
         gpuMemory.Sample();
@@ -180,14 +183,26 @@ internal static class CorpusBench
         public static LocalEngine Load(string path, string device, Int8Path int8Path, bool cutAtQuietestPoints, bool timeGpuOperations)
         {
             if (device == "cpu")
+            {
+                if (timeGpuOperations)
+                    throw new ArgumentException("--gpu-operations needs --device gpu or gpu:<adapter>.");
                 return new LocalEngine(new ParakeetModel(path, int8Path), int8Path, cutAtQuietestPoints);
+            }
             if (device != "gpu" && !device.StartsWith("gpu:", StringComparison.Ordinal))
                 throw new ArgumentException($"ParakeetRuntime.Net's --device is cpu, gpu or gpu:<adapter>, not {device}.");
             var model = new ParakeetModel(path, allowGpu: true, device == "gpu" ? null : device["gpu:".Length..]);
-            if (model.IsUsingGpu)
-                return new LocalEngine(model, int8Path, cutAtQuietestPoints, timeGpuOperations ? model.TimeEveryGpuOperation() : null);
-            model.Dispose();
-            throw new InvalidOperationException($"No usable GPU matched {device}; see --list-gpus.");
+            if (!model.IsUsingGpu)
+            {
+                model.Dispose();
+                throw new InvalidOperationException($"No usable GPU matched {device}; see --list-gpus.");
+            }
+            var operationTimes = timeGpuOperations ? model.TimeEveryGpuOperation() : null;
+            if (timeGpuOperations && operationTimes is null)
+            {
+                model.Dispose();
+                throw new InvalidOperationException($"{model.BackendName} has no GPU timestamps, so --gpu-operations can't time it.");
+            }
+            return new LocalEngine(model, int8Path, cutAtQuietestPoints, operationTimes);
         }
 
         public string Name => model.IsUsingGpu
@@ -206,7 +221,10 @@ internal static class CorpusBench
 
         private string TranscribeInOneCall(float[] samples)
         {
+            var ranOnTheGpu = model.IsUsingGpu;
             var text = model.Transcribe(samples, out var profile);
+            if (ranOnTheGpu && !model.IsUsingGpu)
+                throw new InvalidOperationException("The GPU was lost during the run and the model went on on the CPU; the timings would mix both.");
             if (model.IsUsingGpu)
             {
                 gpuEncoderMs += profile.EncoderMs;

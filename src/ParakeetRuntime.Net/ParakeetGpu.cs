@@ -607,7 +607,8 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             bufSubB?.Dispose();
             bufFeatsUpload?.Dispose();
 
-            scratchFrames = Math.Max(frames, MelFramesOfTheSmallestSubsamplingScratch);
+            int melFramesOfTheLongestPiece = QuietestPointCutter.LongestPiece / melHop + 1;
+            scratchFrames = Math.Max(frames, Math.Min(Math.Max(MelFramesOfTheSmallestSubsamplingScratch, scratchFrames * 2), melFramesOfTheLongestPiece));
             int h1 = (scratchFrames - 1) / 2 + 1, w1 = (melBins - 1) / 2 + 1;
             int h2 = (h1 - 1) / 2 + 1, w2 = (w1 - 1) / 2 + 1;
             ulong featsBytes = (ulong)scratchFrames * (ulong)melBins * 4;
@@ -1283,6 +1284,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             for (int i = 0; i < layers.Length; i++)
                 DispatchQ8Gemm(floatMega, peOffset, firstRowByteOffset, table, rows, layers[i].Pos, GpuEpilogue.Store, (ulong)i * ProjectedPositionsBytesPerLayer);
             gpu.Transition(table, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            gpu.MarkOperationEnd("positions table, once");
             gpu.ExecuteAndWait();
         }
         catch

@@ -100,8 +100,10 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
 - Activation scratch buffers (`bufX`, `bufA`, `bufB`, `bufWide`, the subsampling and Mel buffers,
   the token buffer) grow on demand to the largest audio, frame count and `T` seen so far, and are
   then reused. The audio and `T` buffers grow at least twofold. The Mel and subsampling buffers
-  grow to exactly the frames needed: they are about 33 KB per Mel frame, so doubling them spilled a
-  2 GB GPU into shared memory on 2-minute audio.
+  start at 1,024 Mel frames and double, but never past the 2,001 frames of a 20 s piece (the
+  longest `SpeechEngine` sends); a longer input gets exactly the frames it needs. They are about
+  33 KB per Mel frame, so doubling past that spilled a 2 GB GPU into shared memory on 2-minute
+  audio.
 - The projected positions (`pe × linear_pos`, `2T − 1` rows per layer) depend only on the
   position, never on the audio. The first utterance of 20 s or less (`T ≤ 251`) fills a table of
   501 rows per layer for all 24 layers (47 MB), with the same Q8 GEMM writing at a per-layer offset;
@@ -196,8 +198,9 @@ fused epilogue (`GpuEpilogue`: store, SiLU, add to `Y`, add half to `Y`).
     columns (rows `ty*4..+3` and `32+ty*4..+3`, columns `tx*4..+3`). Shared memory is two
     `float4[32][16]` arrays, 16 KB.
   - `Q8GemmSmallMain`: a 32 x 32 output tile, 8 x 8 = 64 threads, 4 x 4 outputs each, 8 KB of
-    shared memory. It starts twice as many thread groups per axis (four times as many in all) as
-    the 64 x 64 tile would, which keeps a large GPU busy on short utterances. It is used up to
+    shared memory. It starts up to four times as many thread groups as the 64 x 64 tile would
+    (twice as many per axis that the matrix fills), which keeps a large GPU busy on short
+    utterances. It is used up to
     `RowsUpToWhichLargeTileUnderfillsALargeGpu` (96) rows on a GPU with 4 GiB of dedicated memory or
     more, and up to `RowsUpToWhichLargeTileUnderfillsASmallGpu` (40) rows below that. Dedicated
     memory stands in for the GPU's size, which Direct3D 12 does not report: on the 2 GB MX450 the
