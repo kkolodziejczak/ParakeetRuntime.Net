@@ -20,7 +20,7 @@ public sealed class SpeechEngine : IDisposable
     /// Loads an installed model into memory. This reads the whole model file and takes a few seconds.
     /// </summary>
     /// <param name="speechModel">The installed model to load.</param>
-    /// <param name="options">Where the model runs; on a GPU when one is usable, when omitted.</param>
+    /// <param name="options">Where the model runs; on a usable discrete GPU, else the CPU, when omitted.</param>
     /// <param name="cancellationToken">Cancels the load before it starts.</param>
     /// <returns>An engine ready to transcribe.</returns>
     /// <exception cref="FileNotFoundException">The model is not installed; see <see cref="SpeechModel.IsInstalled"/>.</exception>

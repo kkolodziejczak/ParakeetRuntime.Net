@@ -40,7 +40,7 @@ marked as estimates where nothing was timed. When an idea is built or rejected, 
 
 ### Large GPUs: tile threshold, split-K and the decoder
 
-- The small-GPU tile threshold (40 rows below 4 GiB of dedicated memory) is measured on the MX450
+- The small-GPU tile threshold (40 rows below 3 GiB of dedicated memory) is measured on the MX450
   only. On the RTX 5070 Ti the 96-row threshold stays as tuned on 2026-11-22; re-check 48–96 rows
   there with `--gemm-bench --frames 48,64,80,96`.
 - At 120 rows and 1,024 outputs the 64 × 64 tile starts 32 thread groups, under half of the RTX

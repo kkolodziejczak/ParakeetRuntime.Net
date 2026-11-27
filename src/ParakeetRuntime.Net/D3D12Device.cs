@@ -560,8 +560,13 @@ internal sealed unsafe class D3D12Device : IDisposable
 
     public void MarkOperationEnd(string operation)
     {
-        if (operationTimes is null || operationsEndingAtSlot.Count >= TimedOperationSlots)
+        if (operationTimes is null || !listOpen)
             return;
+        if (operationsEndingAtSlot.Count >= TimedOperationSlots)
+        {
+            operationTimes.MissedOperations++;
+            return;
+        }
         EndQuery(commandList, timestampHeap, D3D12_QUERY_TYPE_TIMESTAMP, SlotsOfTheEncoderDecoderSplit + (uint)operationsEndingAtSlot.Count);
         operationsEndingAtSlot.Add(operation);
     }

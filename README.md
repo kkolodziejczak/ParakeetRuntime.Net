@@ -18,7 +18,7 @@ string text = await engine.TranscribeWavAsync("hello.wav");
 
 ## Why
 
-It is pure C# in one NuGet package, so you don't have to ship Python, CUDA, or native binaries alongside your app. On a GPU, the engine talks to Direct3D 12 (tested on NVIDIA and Intel) through the DLLs Windows already ships; if there isn't a usable GPU, it falls back to the CPU.
+It is pure C# in one NuGet package, so you don't have to ship Python, CUDA, or native binaries alongside your app. On a GPU, the engine talks to Direct3D 12 (tested on NVIDIA and Intel) through the DLLs Windows already ships; if there isn't a usable discrete GPU, it falls back to the CPU, which beat the integrated GPUs we measured.
 
 On most hardware it runs faster than NVIDIA's own C++ engine, NeMo-Speech.cpp, with the same accuracy. Transcription stays local, and the model is pinned to one exact file verified by SHA-256.
 

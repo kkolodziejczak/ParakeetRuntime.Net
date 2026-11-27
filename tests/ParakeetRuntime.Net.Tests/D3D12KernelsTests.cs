@@ -635,16 +635,19 @@ public sealed unsafe class D3D12KernelsTests
     [GpuFact]
     public void An_integrated_gpu_is_used_only_when_allowed()
     {
+        int checkedAdapters = 0;
         foreach (var adapter in GpuTestSupport.Adapters)
         {
             using var allowed = D3D12Device.TryCreate(adapterNameFilter: adapter.Name, integratedGpuAllowed: true);
             if (allowed is null)
                 continue;
+            checkedAdapters++;
             using var notAllowed = D3D12Device.TryCreate(adapterNameFilter: adapter.Name, integratedGpuAllowed: false);
             Assert.Equal(allowed.IsIntegrated, notAllowed is null);
             if (IsAnIntelIntegratedGpuName(adapter.Name))
                 Assert.True(allowed.IsIntegrated, $"{adapter.Name} is an integrated GPU.");
         }
+        Assert.True(checkedAdapters > 0, "Expected at least one D3D12 device.");
     }
 
     [GpuFact]

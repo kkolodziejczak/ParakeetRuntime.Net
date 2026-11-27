@@ -251,7 +251,10 @@ internal static class CorpusBench
                 return stages;
             var timed = gpuOperationTimes.Totals.ToList();
             var gpuMs = timed.Sum(operation => operation.Milliseconds);
-            return stages.Append($"  GPU time per operation, all passes, {gpuMs / 1000:0.00} s:")
+            if (gpuMs <= 0)
+                return stages.Append("  GPU time per operation: nothing was timed.");
+            var missed = gpuOperationTimes.MissedOperations > 0 ? $", {gpuOperationTimes.MissedOperations:N0} operations after the last timestamp slot not timed" : "";
+            return stages.Append($"  GPU time per operation, all passes, {gpuMs / 1000:0.00} s{missed}:")
                 .Concat(timed.Select(operation => $"    {operation.Operation,-30} {operation.Milliseconds / 1000,7:0.00} s  {100 * operation.Milliseconds / gpuMs,5:0.0}%  {operation.Count,8:N0} times, {1000 * operation.Milliseconds / operation.Count,8:0.0} us each"));
         }
 

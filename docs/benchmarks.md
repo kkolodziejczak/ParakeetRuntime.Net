@@ -1261,3 +1261,10 @@ Rejected, `--gemm-bench` on the MX450 against the shipped 64 × 64 kernel, bits 
 - The record also left out the one-off submit that builds the positions table on the first
   utterance of 20 s or less; `--gpu-operations` now reports it as "positions table, once". In that
   run the warm-up clip built it, so the shares in the table are unchanged.
+
+## 2026-11-27 · Correction to "Q8 GEMM tile on small GPUs": 3 GiB, not 4 GiB
+
+- The small-GPU rule now applies below 3 GiB of dedicated memory instead of below 4 GiB. Windows can
+  report a 4 GB card as a little under 4 GiB, which would have put it on the rule measured only on
+  the 2 GB MX450. Found by the 2026-11-27 review (Neon). The MX450's numbers in that record are
+  unchanged.

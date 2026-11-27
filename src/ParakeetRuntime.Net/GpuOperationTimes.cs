@@ -4,6 +4,8 @@ internal sealed class GpuOperationTimes
 {
     private readonly Dictionary<string, (double Milliseconds, long Count)> totals = [];
 
+    public long MissedOperations { get; set; }
+
     public IEnumerable<(string Operation, double Milliseconds, long Count)> Totals =>
         totals.OrderByDescending(t => t.Value.Milliseconds).Select(t => (t.Key, t.Value.Milliseconds, t.Value.Count));
 
@@ -13,5 +15,9 @@ internal sealed class GpuOperationTimes
         totals[operation] = (sum + milliseconds, count + 1);
     }
 
-    public void Clear() => totals.Clear();
+    public void Clear()
+    {
+        totals.Clear();
+        MissedOperations = 0;
+    }
 }

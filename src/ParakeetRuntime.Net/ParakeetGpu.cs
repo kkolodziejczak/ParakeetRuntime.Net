@@ -1246,7 +1246,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     internal const int Q8GemmLargeTile = 64, Q8GemmSmallTile = 32;
     private const int RowsUpToWhichLargeTileUnderfillsALargeGpu = 96;
     private const int RowsUpToWhichLargeTileUnderfillsASmallGpu = 40;
-    private const long DedicatedMemoryBelowWhichAGpuCountsAsSmall = 4L << 30;
+    private const long DedicatedMemoryBelowWhichAGpuCountsAsSmall = 3L << 30;
 
     internal static int Q8GemmTile(int rows, long dedicatedVideoMemoryBytes)
     {

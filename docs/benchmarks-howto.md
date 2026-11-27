@@ -50,7 +50,7 @@ What a run does and prints:
   engine's threads; a NeMo-Speech.cpp server runs in its own process and is not affected.
 - After the passes, ParakeetRuntime.Net prints where the time went. On the CPU every stage is timed
   (mel, subsampling, feed-forward, attention, convolution, output norm, decoder); on a GPU only the
-  encoder and decoder are.
+  encoder and decoder are, unless `--gpu-operations` is given.
 - GPU memory is the process's dedicated and shared usage over all adapters, as Task Manager shows
   it, from Windows' "GPU Process Memory" counters. It is read after loading and after each clip,
   outside the timed work, so both engines are measured the same way. On an integrated GPU the model

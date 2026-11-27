@@ -5,7 +5,7 @@ namespace ParakeetRuntime.Net.Tests;
 public class Q8GemmTileTests
 {
     private const long TwoGigabytes = 2L << 30;
-    private const long FourGigabytes = 4L << 30;
+    private const long ThreeGigabytes = 3L << 30;
     private const long SixteenGigabytes = 16L << 30;
 
     [Theory]
@@ -15,13 +15,13 @@ public class Q8GemmTileTests
     public void A_small_gpu_takes_the_large_tile_above_40_rows(int rows, int tile)
     {
         Assert.Equal(tile, ParakeetGpu.Q8GemmTile(rows, TwoGigabytes));
-        Assert.Equal(tile, ParakeetGpu.Q8GemmTile(rows, FourGigabytes - 1));
+        Assert.Equal(tile, ParakeetGpu.Q8GemmTile(rows, ThreeGigabytes - 1));
     }
 
     [Fact]
-    public void A_gpu_with_4_GiB_counts_as_large()
+    public void A_gpu_with_3_GiB_counts_as_large()
     {
-        Assert.Equal(ParakeetGpu.Q8GemmSmallTile, ParakeetGpu.Q8GemmTile(96, FourGigabytes));
+        Assert.Equal(ParakeetGpu.Q8GemmSmallTile, ParakeetGpu.Q8GemmTile(96, ThreeGigabytes));
     }
 
     [Theory]

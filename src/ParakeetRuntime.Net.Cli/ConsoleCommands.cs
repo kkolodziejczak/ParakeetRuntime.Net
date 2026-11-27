@@ -14,8 +14,8 @@ internal static class ConsoleCommands
                                                                                  serves the page and the HTTP API on 127.0.0.1 until Ctrl+C
           parakeet-runtime --help | --version
 
-        The text goes to standard output; messages go to standard error. --device defaults to a GPU
-        when one is usable, else the CPU.
+        The text goes to standard output; messages go to standard error. --device defaults to a usable
+        discrete GPU, else the CPU; an integrated GPU runs only when named, as in --device gpu:UHD.
 
         HTTP API of serve:
           GET  /                          the page: drop a WAV, read its text.
