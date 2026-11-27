@@ -3,7 +3,7 @@
 Add the package to a project targeting `net10.0-windows` (without `-windows`, the build warns that the API is Windows-only):
 
 ```powershell
-dotnet add package ParakeetRuntime.Net --prerelease
+dotnet add package ParakeetRuntime.Net
 ```
 
 Install the model once, load `SpeechEngine` once, and hold onto that instance for the life of your app. Loading reads the 714 MB weights file and prepares the engine for your hardware, so you don't want to do it per call.

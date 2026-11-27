@@ -5,7 +5,7 @@ Offline speech-to-text for .NET on Windows, in pure C#. It runs NVIDIA's Parakee
 Add the package to a project targeting `net10.0-windows` (without `-windows`, the build warns that the API is Windows-only):
 
 ```powershell
-dotnet add package ParakeetRuntime.Net --prerelease
+dotnet add package ParakeetRuntime.Net
 ```
 
 ```csharp

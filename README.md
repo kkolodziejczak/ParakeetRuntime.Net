@@ -1,7 +1,7 @@
 # ParakeetRuntime.Net
 
 [![CI](https://github.com/kkolodziejczak/ParakeetRuntime.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/kkolodziejczak/ParakeetRuntime.Net/actions/workflows/ci.yml)
-[![NuGet](https://img.shields.io/nuget/vpre/ParakeetRuntime.Net?label=NuGet)](https://www.nuget.org/packages/ParakeetRuntime.Net)
+[![NuGet](https://img.shields.io/nuget/v/ParakeetRuntime.Net?label=NuGet)](https://www.nuget.org/packages/ParakeetRuntime.Net)
 [![NuGet downloads](https://img.shields.io/nuget/dt/ParakeetRuntime.Net?label=downloads)](https://www.nuget.org/packages/ParakeetRuntime.Net)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/LICENSE)
 
@@ -44,7 +44,7 @@ Desktop numbers were measured on 2026-11-22 and 2026-11-23 on the engine before 
 In a .NET project targeting `net10.0-windows`, install the package and run the snippet at the top:
 
 ```powershell
-dotnet add package ParakeetRuntime.Net --prerelease
+dotnet add package ParakeetRuntime.Net
 ```
 
 To use the standalone app instead, download `ParakeetRuntime.Net-<version>-win-x64.zip` from [Releases](https://github.com/kkolodziejczak/ParakeetRuntime.Net/releases/latest), unzip it, and run it from PowerShell:
