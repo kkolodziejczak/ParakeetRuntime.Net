@@ -652,11 +652,11 @@ internal sealed unsafe class D3D12Device : IDisposable
     {
         if (!listOpen)
             return;
-        string[] timedOperations = [.. operationsEndingAtSlot];
-        if (timedOperations.Length > 1)
+        string[]? timedOperations = operationsEndingAtSlot.Count > 1 ? [.. operationsEndingAtSlot] : null;
+        if (timedOperations is not null)
             ResolveQueryData(commandList, timestampHeap, D3D12_QUERY_TYPE_TIMESTAMP, SlotsOfTheEncoderDecoderSplit, (uint)timedOperations.Length, operationTimestampsReadback!.Resource, 0);
         WaitFor(Submit());
-        if (timedOperations.Length > 1)
+        if (timedOperations is not null)
             AddTheTimedOperationsOf(timedOperations);
     }
 
