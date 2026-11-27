@@ -196,8 +196,12 @@ fused epilogue (`GpuEpilogue`: store, SiLU, add to `Y`, add half to `Y`).
     columns (rows `ty*4..+3` and `32+ty*4..+3`, columns `tx*4..+3`). Shared memory is two
     `float4[32][16]` arrays, 16 KB.
   - `Q8GemmSmallMain`: a 32 x 32 output tile, 8 x 8 = 64 threads, 4 x 4 outputs each, 8 KB of
-    shared memory. Up to `RowsUpToWhichLargeTileUnderfillsTheGpu` rows, it starts twice as many
-    thread groups per axis (four times as many in all) as the 64 x 64 tile would, which keeps a large GPU busy on short utterances.
+    shared memory. It starts twice as many thread groups per axis (four times as many in all) as
+    the 64 x 64 tile would, which keeps a large GPU busy on short utterances. It is used up to
+    `RowsUpToWhichLargeTileUnderfillsALargeGpu` (96) rows on a GPU with 4 GiB of dedicated memory or
+    more, and up to `RowsUpToWhichLargeTileUnderfillsASmallGpu` (40) rows below that. Dedicated
+    memory stands in for the GPU's size, which Direct3D 12 does not report: on the 2 GB MX450 the
+    64 x 64 tile was already 1.22–1.31x faster at 48–96 rows (2026-11-27 record).
 - Each thread stages 4 rows x 4 k values of `X`, and the same of `W`, transposed into one
   `float4` per k: `rowQuad = tid >> 3` is the group of four rows, `kCol = 4 * (tid & 7)` the first
   k. The shared arrays are indexed `[k][rowQuad ^ (k >> 2)]`, an XOR swizzle of the quad column.

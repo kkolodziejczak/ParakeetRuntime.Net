@@ -3,8 +3,8 @@
 Performance ideas that were proposed and checked on paper, or measured only partly, and are not in
 the engine. Each says what it would gain, what is known, and what proving it takes. Measured values
 belong in [benchmarks.md](benchmarks.md) once an idea is built; the figures here come from the
-2026-11-26 research round on the laptop (i7-11850H, MX450, Intel UHD) and are marked as estimates
-where nothing was timed. When an idea is built or rejected, remove it here.
+2026-11-26 and 2026-11-27 research rounds on the laptop (i7-11850H, MX450, Intel UHD) and are
+marked as estimates where nothing was timed. When an idea is built or rejected, remove it here.
 
 ## GPU
 
@@ -22,22 +22,42 @@ where nothing was timed. When an idea is built or rejected, remove it here.
   compile. The driver may already cache across processes, so measure a second process start before
   and after.
 
-### A lower large-tile threshold on small GPUs
+### int8 dot products in the Q8 GEMM (Shader Model 6.4)
 
-- **Gain:** GPU transcription of 4–8 s clips. `RowsUpToWhichLargeTileUnderfillsTheGpu` (96 rows)
-  was tuned on an RTX 5070 Ti. On the MX450 the 64 × 64 tile already beat the 32 × 32 one at 64 and
-  96 rows in `--gemm-bench` (1.25× and 1.39×, contended).
-- **Open:** pick the threshold per adapter (for example by its multiprocessor count, or a short
-  calibration after load) and measure the corpus on the MX450, the UHD and the RTX.
+- **Gain, estimated:** the encoder's Q8 GEMMs are 84% of GPU time on the MX450 (2026-11-27
+  record) and run fp32 multiply-adds at about half the card's fp32 peak. `dot4add_i8packed` does
+  four int8 multiply-adds per instruction, with activations quantized per 32-block as the CPU path
+  already does. If the hardware runs it at the fp32 instruction rate, the GEMMs could be up to about
+  twice as fast. Of the 2026-11-27 research round, Neon expected 2–3x end to end on the MX450 and
+  the UHD, and Fable expected little on NVIDIA cards outside tensor cores.
+- **Known:** FXC compiles only up to `cs_5_1`; this needs DXC at build time (the
+  `Microsoft.Direct3D.DXC` package), which produces signed DXIL that the inbox `d3d12.dll` loads, so
+  no new runtime DLL. GPU transcripts would change towards the CPU path's int8 rounding.
+- **Next:** prove the hardware rate first. Two compute shaders with the bindings of `Q8Gemm.hlsl`,
+  one doing fp32 `mad` and one `dot4add_i8packed` at the same multiply-add count as a layer's GEMMs,
+  compiled with DXC to `cs_6_4` and timed by `--gemm-bench` (which then has to accept compiled
+  bytecode). Build the GEMM only if `dot4add_i8packed` is clearly faster.
+
+### Large GPUs: tile threshold, split-K and the decoder
+
+- The small-GPU tile threshold (40 rows below 4 GiB of dedicated memory) is measured on the MX450
+  only. On the RTX 5070 Ti the 96-row threshold stays as tuned on 2026-11-22; re-check 48–96 rows
+  there with `--gemm-bench --frames 48,64,80,96`.
+- At 120 rows and 1,024 outputs the 64 × 64 tile starts 32 thread groups, under half of the RTX
+  5070 Ti's 70 multiprocessors. Split-K, or the small tile, may fill it. Desktop only.
+- On the MX450 the decoder's LSTM and joint output already read their weights at about the memory
+  rate (2026-11-27 record), so one dispatch per batch would not help there. On the RTX the decoder's
+  share has never been recorded: run `--gpu-operations` there first.
 
 ### GPU subsampling in strips
 
 - **Gain:** GPU memory. The subsampling planes (`bufSubA`, `bufSubB`) are 86% of the GPU scratch:
   about 78 MB at 20 s and 470 MB for 2 minutes of uncut audio. Processing them in strips of 64
-  output frames with the right halo would need about 20 MB at any length.
-- **Open:** halo indexing in `SubConv0ReluMain` and `SubDwConvMain`, a test against the whole-plane
-  result for frame counts at and off strip boundaries, and a check that uncut long audio on the
-  MX450 stops spilling into shared memory.
+  output frames with the right halo would need about 20 MB at any length. Since 2026-11-27 the
+  planes grow only to the frames needed, which ended the MX450's spill into shared memory on
+  2-minute files; strips would still cut the memory.
+- **Open:** halo indexing in `SubConv0ReluMain` and `SubDwConvMain`, and a test against the
+  whole-plane result for frame counts at and off strip boundaries.
 
 ### Coalesced decoder GEMV
 

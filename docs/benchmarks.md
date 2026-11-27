@@ -1205,3 +1205,46 @@ RTF 0.01887 with the timestamps (0.0177 without them, same day); transcripts ide
 - At 1,167 µs, one feed-forward-in GEMM does 2 × 120 × 4,096 × 1,024 = 1.0 GFLOP: 0.86 TFLOP/s.
   `--gemm-bench` at T = 120 gets 1.4 TFLOP/s from the same kernel, so the corpus run loses about a
   third somewhere (clocks under a sustained load, the timestamps, or cold caches); not traced.
+
+## 2026-11-27 · Q8 GEMM tile on small GPUs, and two kernel variants rejected
+
+- **Machine:** Intel Core i7-11850H laptop, NVIDIA GeForce MX450 2 GB (driver 596.71) and Intel UHD Graphics (driver 32.0.101.7088), on mains power
+- **Commit:** before `5e4aff5`; after: the commit that adds this record
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** `--gemm-bench` uses random data in one Conformer layer's GEMM shapes; the corpus is the laptop's `en_us/wav16`, 150 clips of 20 s or less (1,436.8 s)
+
+`--gemm-bench --frames 16,32,48,64,80,96`, 64 × 64 tile against 32 × 32, ms per layer:
+
+| Frames | 16 | 32 | 48 | 64 | 80 | 96 |
+| --- | --- | --- | --- | --- | --- | --- |
+| MX450, 32 × 32 | 2.575 | 1.828 | 3.665 | 3.425 | 5.806 | 5.760 |
+| MX450, 64 × 64 | 3.497 | 2.437 | 2.796 | 2.812 | 4.650 | 4.628 |
+| MX450, 64 × 64 speed-up | 0.74x | 0.75x | 1.31x | 1.22x | 1.25x | 1.24x |
+| UHD, 64 × 64 speed-up | | 0.61x | 1.08x | 1.10x | | 0.92x |
+
+Corpus on the MX450, the 64 × 64 tile above 40 rows instead of above 96, built alternately,
+`--passes 3 --affinity 5500`, best pass of each run:
+
+| Round | Above 96 rows (before) | Above 40 rows |
+| --- | --- | --- |
+| 3 | 0.01777 | 0.01671 |
+| 4 | 0.01781 | 0.01673 |
+
+- 6% faster, transcripts identical in 150 of 150 clips. Two earlier `--passes 2` rounds were noisier
+  (0.4% and 9%).
+- Built for GPUs with less than 4 GiB of dedicated memory only: the 96-row threshold was tuned on the
+  RTX 5070 Ti (2026-11-22) and that card was not available to re-check. The UHD (128 MB dedicated)
+  follows the small-GPU rule, a mixed result in the table above; it is used only when named.
+
+Rejected, `--gemm-bench` on the MX450 against the shipped 64 × 64 kernel, bits identical:
+
+| Variant | T = 1500 | T = 250 | T = 120 | T = 64 |
+| --- | --- | --- | --- | --- |
+| 8 × 8 outputs per thread (64 threads, Fable) | 0.86x | 0.68x | 0.68x | |
+| Next k block loaded into registers during the current one | 1.13x | 0.97x | 0.95x | 0.96x |
+
+- `SpeechEngine` never runs more than 251 frames at once, so the second variant's gain at 1,500
+  frames does not reach users.
+- GPU clocks during a corpus run and during `--gemm-bench` (`nvidia-smi`, 250 ms samples): 1,719 and
+  1,800 MHz, memory 5,000 MHz both. Clocks do not explain the corpus GEMMs running slower than the
+  bench; the tile choice for short clips does part of it.

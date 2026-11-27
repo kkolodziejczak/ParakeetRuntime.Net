@@ -1225,7 +1225,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
 
     private void DispatchQ8Gemm(GpuBuffer input, ulong inputSrvOffset, uint xByteOffset, GpuBuffer output, int M, in GpuQ8Weight w, GpuEpilogue epilogue, ulong outputUavOffset = 0)
     {
-        var tile = Q8GemmTile(M);
+        var tile = Q8GemmTile(M, gpu.DedicatedVideoMemoryBytes);
         var pipeline = psoQ8GemmSmall;
         if (tile == Q8GemmLargeTile && largeGemmCompile.IsCompletedSuccessfully)
             pipeline = largeGemmCompile.Result;
@@ -1243,9 +1243,17 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     }
 
     internal const int Q8GemmLargeTile = 64, Q8GemmSmallTile = 32;
-    private const int RowsUpToWhichLargeTileUnderfillsTheGpu = 96;
+    private const int RowsUpToWhichLargeTileUnderfillsALargeGpu = 96;
+    private const int RowsUpToWhichLargeTileUnderfillsASmallGpu = 40;
+    private const long DedicatedMemoryBelowWhichAGpuCountsAsSmall = 4L << 30;
 
-    private static int Q8GemmTile(int rows) => rows > RowsUpToWhichLargeTileUnderfillsTheGpu ? Q8GemmLargeTile : Q8GemmSmallTile;
+    internal static int Q8GemmTile(int rows, long dedicatedVideoMemoryBytes)
+    {
+        int rowsUpToWhichLargeTileUnderfills = dedicatedVideoMemoryBytes < DedicatedMemoryBelowWhichAGpuCountsAsSmall
+            ? RowsUpToWhichLargeTileUnderfillsASmallGpu
+            : RowsUpToWhichLargeTileUnderfillsALargeGpu;
+        return rows > rowsUpToWhichLargeTileUnderfills ? Q8GemmLargeTile : Q8GemmSmallTile;
+    }
 
     private static nint WaitForLargeGemmPipelineOrZero(Task<nint>? compile)
     {
