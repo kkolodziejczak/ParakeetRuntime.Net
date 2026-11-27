@@ -1128,3 +1128,25 @@ All eight together, baseline against final:
 - The two review-fix commits after `2e6688a` (`96b74f6`, `b9a9712`) change no transcript: identical results to
   `2e6688a` on the CPU (`96b74f6`) and the MX450 (both), both languages.
 - Ideas measured and not built, and ideas not measured, are in [ideas.md](ideas.md).
+
+## 2026-11-27 · GPU subsampling scratch sized to the frames needed
+
+- **Machine:** Intel Core i7-11850H laptop, NVIDIA GeForce MX450 2 GB (driver 596.71), on mains power
+- **Commit:** before `801c32a`; after: the commit that adds this record
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** the laptop corpus, `en_us/long120` (11 files, 1,458.3 s), whole files (no `--cut`)
+- **Command:** `parakeet-runtime --corpus <long120 list> --reference <dev.tsv> --passes 2 --device gpu:MX450 --affinity 5500`
+
+`EnsureScratch` grew the Mel and subsampling buffers to at least twice their previous size. At about
+33 KB per Mel frame, a 140 s file after a 120 s one asked for room for 240 s.
+
+| | Before | After |
+| --- | --- | --- |
+| RTF, pass 1 / 2 | 0.05284 / 0.06010 | 0.02354 / 0.02349 |
+| GPU peak dedicated / shared | 1,378 / 570 MB | 1,391 / 52 MB |
+| Encoder / decoder share | 85.6% / 14.4% | 95.8% / 4.2% |
+
+- Transcripts identical in 11 of 11 files.
+- Same run of `long60` before the change, for scale: RTF 0.02051–0.02065, 44 MB shared. The 2-minute
+  files now cost about what their extra attention work predicts.
+- Only uncut audio over 20 s reached this: `SpeechEngine` cuts audio into pieces of 20 s or less.

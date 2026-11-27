@@ -96,7 +96,9 @@ descriptor heaps. A shader reads its inputs as `ByteAddressBuffer` and writes as
   (`wdMega`) and every float tensor (`floatMega`). Each tensor starts at a 256-byte aligned offset.
 - Activation scratch buffers (`bufX`, `bufA`, `bufB`, `bufWide`, the subsampling and Mel buffers,
   the token buffer) grow on demand to the largest audio, frame count and `T` seen so far, and are
-  then reused.
+  then reused. The audio and `T` buffers grow at least twofold. The Mel and subsampling buffers
+  grow to exactly the frames needed: they are about 33 KB per Mel frame, so doubling them spilled a
+  2 GB GPU into shared memory on 2-minute audio.
 - The projected positions (`pe × linear_pos`, `2T − 1` rows per layer) depend only on the
   position, never on the audio. The first utterance of 20 s or less (`T ≤ 251`) fills a table of
   501 rows per layer for all 24 layers (47 MB), with the same Q8 GEMM writing at a per-layer offset;

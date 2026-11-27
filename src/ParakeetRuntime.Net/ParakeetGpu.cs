@@ -18,6 +18,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
     private const int UncalibratedDecodeBatchSteps = 64;
     private const int MaxDecodeBatchSteps = 512;
     private const int MinDecodedTokensCapacity = 4096;
+    private const int MelFramesOfTheSmallestSubsamplingScratch = 1024;
     private const int InlineTokenCopyCount = 1024;
     private const double SubmitBudgetMsUnderGpuTimeout = 350.0;
     private const uint MaxDispatchX = 65535u;
@@ -602,7 +603,7 @@ internal sealed unsafe class ParakeetGpu : IDisposable
             bufSubB?.Dispose();
             bufFeatsUpload?.Dispose();
 
-            scratchFrames = Math.Max(frames, Math.Max(1024, scratchFrames * 2));
+            scratchFrames = Math.Max(frames, MelFramesOfTheSmallestSubsamplingScratch);
             int h1 = (scratchFrames - 1) / 2 + 1, w1 = (melBins - 1) / 2 + 1;
             int h2 = (h1 - 1) / 2 + 1, w2 = (w1 - 1) / 2 + 1;
             ulong featsBytes = (ulong)scratchFrames * (ulong)melBins * 4;
