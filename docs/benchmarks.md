@@ -1268,3 +1268,27 @@ Rejected, `--gemm-bench` on the MX450 against the shipped 64 × 64 kernel, bits 
   report a 4 GB card as a little under 4 GiB, which would have put it on the rule measured only on
   the 2 GB MX450. Found by the 2026-11-27 review (Neon). The MX450's numbers in that record are
   unchanged.
+
+## 2026-11-27 · Laptop rows of the README table
+
+- **Machine:** Intel Core i7-11850H laptop (8 cores, 16 threads), 32 GB RAM, on mains power; NVIDIA GeForce MX450 2 GB (driver 596.71) and Intel UHD Graphics (driver 32.0.101.7088)
+- **Commit:** `22fb689` (`master`)
+- **Model:** `parakeet-tdt-0.6b-v3.q8_0.gguf`
+- **Audio:** the laptop corpus, FLEURS dev `en_us` and `pl_pl`, clips of 20 s or less (150 each; 1,436.8 s and 1,311.5 s)
+- **Command:** `scripts/Run-Matrix.ps1 -Lengths wav16 -LocalDevices gpu:MX450,gpu:Intel,cpu -Affinity 5500 -Baseline <the 2026-11-25 run>`; 3 passes, best reported. NeMo-Speech.cpp was not run again: its 2026-11-25 run on the same laptop, files and model is the comparison.
+
+| | EN RTF | PL RTF | NeMo EN / PL (2026-11-25) | × NeMo | WER EN / PL | Load |
+| --- | --- | --- | --- | --- | --- | --- |
+| MX450 | 0.01659 | 0.01737 | 0.02938 / 0.02963 | 1.77 / 1.71 | 5.90% / 6.60% | 0.59–0.61 s |
+| CPU (4 cores, `5500`) | 0.05537* | 0.05315 | 0.20324 / 0.19881 | 3.67 / 3.74 | 5.94% / 6.64% | 0.35–0.44 s |
+| Intel UHD | 0.08619 | 0.09140 | 0.09588 / 0.09215 | 1.11 / 1.01 | 5.90% / 6.60% | 0.43–0.48 s |
+
+- \* The matrix's English CPU run came right after 6 minutes of UHD work and was throttled (passes
+  0.07797, 0.06935, 0.06956). Run again alone at once, the same command gave 0.05537, 0.05646 and
+  0.05655; the table uses that run.
+- Against our own 2026-11-25 transcripts: 146–148 of 150 identical per run, the clips the
+  2026-11-26 valid-frames change moved.
+- Load is the corpus bench's "loaded in" figure from these runs; NeMo's is from its 2026-11-25 runs
+  (1.08–1.60 s).
+- README rows: time per minute of audio is RTF × 60 (MX450 1.00–1.04 s, CPU 3.19–3.32 s, UHD
+  5.17–5.48 s).

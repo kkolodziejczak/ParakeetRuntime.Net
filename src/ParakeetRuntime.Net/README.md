@@ -40,11 +40,11 @@ Compared with NVIDIA's C++ engine, NeMo-Speech.cpp, running the same `parakeet-t
 | Desktop GPU (RTX 5070 Ti) | **0.15–0.16 s** | 2.1–2.3× faster |
 | Desktop CPU (Core Ultra 7 270K Plus) | **0.88–0.90 s** | 4.2–4.3× faster |
 | Desktop integrated GPU | **1.8 s** | 2.2× faster |
-| Laptop GPU (MX450) | **1.5–1.6 s** | 1.1–1.2× faster |
-| Laptop CPU (Core i7-11850H) | **3.4–3.6 s** | 3.4–3.5× faster |
-| Laptop integrated GPU (UHD) | **5.8–5.9 s** | About the same |
+| Laptop GPU (MX450) | **1.0 s** | 1.7–1.8× faster |
+| Laptop CPU (Core i7-11850H) | **3.2–3.3 s** | 3.7× faster |
+| Laptop integrated GPU (UHD) | **5.2–5.5 s** | 1.0–1.1× faster |
 
-Desktop numbers were measured on 2026-11-22 and 2026-11-23 before the engine moved into this repository. Laptop numbers were measured on 2026-11-25 at [`1078f4e`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/1078f4e). Both predate the 2026-11-26 speed-ups. Model load times and every raw run are in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
+Desktop numbers were measured on 2026-11-22 and 2026-11-23 before the engine moved into this repository. Laptop numbers were measured on 2026-11-27 at [`22fb689`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/22fb689), against NeMo's run on the same laptop and clips on 2026-11-25. The desktop's numbers predate the 2026-11-26 and 2026-11-27 speed-ups. Model load times and every raw run are in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
 
 ## Requirements and docs
 

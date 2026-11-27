@@ -33,11 +33,11 @@ Both engines ran the same model (`parakeet-tdt-0.6b-v3.q8_0.gguf`) on the same h
 | Desktop | GPU (RTX 5070 Ti) | **0.15–0.16 s** | 2.1–2.3× faster | 5–6 (same as NeMo) | 1.9 s (NeMo: 0.6–1.6 s) |
 | Desktop | CPU (Core Ultra 7 270K Plus) | **0.88–0.90 s** | 4.2–4.3× faster | 5–6 (same as NeMo) | 1.0 s (NeMo: 0.6–1.6 s) |
 | Desktop | Integrated GPU | **1.8 s** | 2.2× faster | 5–6 (same as NeMo) | 2.3 s (NeMo: 0.6–1.6 s) |
-| Laptop | GPU (MX450) | **1.5–1.6 s** | 1.1–1.2× faster | 6–7 (same as NeMo) | 0.5–1.0 s (NeMo: 1.1–2.2 s) |
-| Laptop | CPU (Core i7-11850H) | **3.4–3.6 s** | 3.4–3.5× faster | 6–7 (same as NeMo) | 0.4 s (NeMo: 1.1–2.2 s) |
-| Laptop | Integrated GPU (UHD) | **5.8–5.9 s** | About the same | 6–7 (same as NeMo) | 0.5–0.6 s (NeMo: 1.1–2.2 s) |
+| Laptop | GPU (MX450) | **1.0 s** | 1.7–1.8× faster | 6–7 (same as NeMo) | 0.6 s (NeMo: 1.1–1.6 s) |
+| Laptop | CPU (Core i7-11850H) | **3.2–3.3 s** | 3.7× faster | 6–7 (same as NeMo) | 0.4 s (NeMo: 1.1–1.6 s) |
+| Laptop | Integrated GPU (UHD) | **5.2–5.5 s** | 1.0–1.1× faster | 6–7 (same as NeMo) | 0.4–0.5 s (NeMo: 1.1–1.6 s) |
 
-Desktop numbers were measured on 2026-11-22 and 2026-11-23 on the engine before it moved into this repository. Laptop speed and accuracy were measured on 2026-11-25 at [`1078f4e`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/1078f4e), and laptop load times on 2026-11-26 at [`d5feee7`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/d5feee7). Everything else, including the desktop's load times, predates the 2026-11-26 speed-ups. Every run, with its command and full numbers, is in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
+Desktop numbers were measured on 2026-11-22 and 2026-11-23 on the engine before it moved into this repository. Laptop numbers were measured on 2026-11-27 at [`22fb689`](https://github.com/kkolodziejczak/ParakeetRuntime.Net/commit/22fb689), against NeMo's run on the same laptop and clips on 2026-11-25. The desktop's numbers predate the 2026-11-26 and 2026-11-27 speed-ups. An integrated GPU runs only when you name it; the CPU beats it. Every run, with its command and full numbers, is in [benchmarks.md](https://github.com/kkolodziejczak/ParakeetRuntime.Net/blob/master/docs/benchmarks.md).
 
 ## Quick start
 
